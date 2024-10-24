@@ -77,6 +77,25 @@ public sealed class AdditionalPropertiesDictionary : IDictionary<string, object?
     /// <inheritdoc />
     public void Add(string key, object? value) => _dictionary.Add(key, value);
 
+    /// <summary>Attempts to add the specified key and value to the dictionary.</summary>
+    /// <param name="key">The key of the element to add.</param>
+    /// <param name="value">The value of the element to add.</param>
+    /// <returns><see langword="true"/> if the key/value pair was added to the dictionary successfully; otherwise, <see langword="false"/>.</returns>
+    public bool TryAdd(string key, object? value)
+    {
+#if NET
+        return _dictionary.TryAdd(key, value);
+#else
+        if (!_dictionary.ContainsKey(key))
+        {
+            _dictionary.Add(key, value);
+            return true;
+        }
+
+        return false;
+#endif
+    }
+
     /// <inheritdoc />
     void ICollection<KeyValuePair<string, object?>>.Add(KeyValuePair<string, object?> item) => ((ICollection<KeyValuePair<string, object?>>)_dictionary).Add(item);
 
