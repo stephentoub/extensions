@@ -3,6 +3,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
 
 namespace Microsoft.Extensions.AI;
@@ -64,5 +66,23 @@ public sealed class ChatClientBuilder
 
         (_clientFactories ??= []).Add(clientFactory);
         return this;
+    }
+
+    /// <summary>
+    /// Adds a delegate-based wrapper around all calls to <see cref="IChatClient.CompleteAsync" /> and <see cref="IChatClient.CompleteStreamingAsync" />.
+    /// </summary>
+    /// <param name="wrapper">The delegate to wrap all operations.</param>
+    /// <returns>The updated <see cref="ChatClientBuilder"/> instance.</returns>
+    /// <remarks>
+    /// The <paramref name="wrapper"/> method will be invoked from both <see cref="IChatClient.CompleteAsync" /> and <see cref="IChatClient.CompleteStreamingAsync" />.
+    /// The invocation will be passed a "next" delegate that should be invoked to continue the pipeline; the invocation of that delegate will
+    /// handle invoking the inner client's corresponding method.
+    /// </remarks>
+    public ChatClientBuilder UseWrapper(
+        Func<IList<ChatMessage>, ChatOptions?, CancellationToken, Func<IList<ChatMessage>, ChatOptions?, CancellationToken, Task>, Task> wrapper)
+    {
+        _ = Throw.IfNull(wrapper);
+
+        return Use(innerClient => new WrapperChatClient(innerClient, wrapper));
     }
 }
