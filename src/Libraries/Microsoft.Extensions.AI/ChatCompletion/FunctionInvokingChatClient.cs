@@ -252,6 +252,13 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                     }
                 }
 
+                // If the original chat completion included usage data, add that into the message so it's available
+                // in the history.
+                if (KeepFunctionCallingMessages && response.Usage is { } usage)
+                {
+                    response.Message.Contents.Add(new UsageContent(usage));
+                }
+
                 // Add the responses from the function calls into the history.
                 var modeAndMessages = await ProcessFunctionCallsAsync(chatMessages, options, functionCallContents, iteration, cancellationToken).ConfigureAwait(false);
                 if (modeAndMessages.MessagesAdded is not null)
@@ -298,14 +305,19 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         {
             for (int iteration = 0; ; iteration++)
             {
+                List<StreamingChatCompletionUpdate> updates = [];
                 List<FunctionCallContent>? functionCallContents = null;
-                await foreach (var chunk in base.CompleteStreamingAsync(chatMessages, options, cancellationToken).ConfigureAwait(false))
+                await foreach (var update in base.CompleteStreamingAsync(chatMessages, options, cancellationToken).ConfigureAwait(false))
                 {
                     // We're going to emit all StreamingChatMessage items upstream, even ones that represent
                     // function calls, because a given StreamingChatMessage can contain other content too.
-                    yield return chunk;
+                    yield return update;
 
-                    foreach (var item in chunk.Contents.OfType<FunctionCallContent>())
+                    // Store all the updates, so we can add it to an intermediate message if needed.
+                    updates.Add(update);
+
+                    // Pull out any that are function call requests.
+                    foreach (var item in update.Contents.OfType<FunctionCallContent>())
                     {
                         functionCallContents ??= [];
                         functionCallContents.Add(item);
@@ -327,10 +339,15 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                     messagesToRemove ??= [];
                 }
 
-                // Add a manufactured response message containing the function call contents to the chat history.
-                ChatMessage functionCallMessage = new(ChatRole.Assistant, [.. functionCallContents]);
-                chatMessages.Add(functionCallMessage);
-                _ = messagesToRemove?.Add(functionCallMessage);
+                // Add a manufactured response message containing the original contents to the chat history.
+                ChatCompletion manufacturedChatCompletion = updates.ToChatCompletion();
+                ChatMessage manufacturedChatMessage = manufacturedChatCompletion.Message;
+                chatMessages.Add(manufacturedChatMessage);
+                _ = messagesToRemove?.Add(manufacturedChatMessage);
+                if (manufacturedChatCompletion.Usage is { } usage)
+                {
+                    manufacturedChatMessage.Contents.Add(new UsageContent(usage));
+                }
 
                 // Process all of the functions, adding their results into the history.
                 var modeAndMessages = await ProcessFunctionCallsAsync(chatMessages, options, functionCallContents, iteration, cancellationToken).ConfigureAwait(false);
