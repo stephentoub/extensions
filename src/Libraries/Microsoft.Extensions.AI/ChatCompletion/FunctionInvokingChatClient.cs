@@ -311,12 +311,25 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                 functionCallContents.Clear();
                 await foreach (var update in base.CompleteStreamingAsync(chatMessages, options, cancellationToken).ConfigureAwait(false))
                 {
-                    // We're going to emit all StreamingChatMessage items upstream, even ones that represent
-                    // function calls, because a given StreamingChatMessage can contain other content, too.
-                    // And if we yield the function calls, and the consumer adds all the content into a message
-                    // that's then added into history, they'll end up with function call contents that aren't
-                    // directly paired with function result contents, which may cause issues for some models
-                    // when the history is later sent again.
+                    // Only one choice is allowed with automatic function calling.
+                    if (choice is null)
+                    {
+                        choice = update.ChoiceIndex;
+                    }
+                    else if (choice != update.ChoiceIndex)
+                    {
+                        ThrowForMultipleChoices();
+                    }
+
+                    // We're going to emit all StreamingChatCompleteUpdates upstream, even ones that represent
+                    // function calls, because a given StreamingChatMessage can contain other information, too,
+                    // such as other content, additional properties, etc. But if we yield the function calls, and
+                    // the consumer adds all the content into a message that's then added into history, they'll end up
+                    // with function call contents that aren't directly paired with function result contents, which may
+                    // cause issues for some models when the history is later sent again. It also doesn't map to how
+                    // content is handled by default for non-streaming. So, we want to remove the function call contents
+                    // from the update before yielding it upstream. If KeepFunctionCallingMessages is true, we'll add
+                    // this function calling content into the history as a separate message subsequently.
 
                     // Find all the FCCs. We need to track these separately in order to be able to process them later.
                     int preFccCount = functionCallContents.Count;
@@ -329,16 +342,6 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                     {
                         update.Contents = addedFccs == update.Contents.Count ?
                             [] : update.Contents.Where(c => c is not FunctionCallContent).ToList();
-                    }
-
-                    // Only one choice is allowed with automatic function calling.
-                    if (choice is null)
-                    {
-                        choice = update.ChoiceIndex;
-                    }
-                    else if (choice != update.ChoiceIndex)
-                    {
-                        ThrowForMultipleChoices();
                     }
 
                     yield return update;
