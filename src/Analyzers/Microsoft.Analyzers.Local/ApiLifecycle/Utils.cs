@@ -90,6 +90,6 @@ internal static class Utils
             }
         }
 
-        results.Add(baseTypesString.Substring(start, baseTypesString.Length - start).Trim());
+        results.Add(baseTypesString.Substring(start).Trim());
     }
 }
