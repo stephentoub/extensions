@@ -140,40 +140,6 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
     public bool AllowConcurrentInvocation { get; set; }
 
     /// <summary>
-    /// Gets or sets a value indicating whether to keep intermediate function calling request
-    /// and response messages in the chat history.
-    /// </summary>
-    /// <value>
-    /// <see langword="true"/> if intermediate messages persist in the <see cref="IList{ChatMessage}"/> list provided
-    /// to <see cref="GetResponseAsync"/> and <see cref="GetStreamingResponseAsync"/> by the caller.
-    /// <see langword="false"/> if intermediate messages are removed prior to completing the operation.
-    /// The default value is <see langword="true"/>.
-    /// </value>
-    /// <remarks>
-    /// <para>
-    /// When the inner <see cref="IChatClient"/> returns <see cref="FunctionCallContent"/> to the
-    /// <see cref="FunctionInvokingChatClient"/>, the <see cref="FunctionInvokingChatClient"/> adds
-    /// those messages to the list of messages, along with <see cref="FunctionResultContent"/> instances
-    /// it creates with the results of invoking the requested functions. The resulting augmented
-    /// list of messages is then passed to the inner client in order to send the results back.
-    /// By default, those messages persist in the <see cref="IList{ChatMessage}"/> list provided to
-    /// <see cref="GetResponseAsync"/> and <see cref="GetStreamingResponseAsync"/> by the caller, such that those
-    /// messages are available to the caller. Set <see cref="KeepFunctionCallingContent"/> to avoid including
-    /// those messages in the caller-provided <see cref="IList{ChatMessage}"/>.
-    /// </para>
-    /// <para>
-    /// Changing the value of this property while the client is in use might result in inconsistencies
-    /// as to whether function calling messages are kept during an in-flight request.
-    /// </para>
-    /// <para>
-    /// If the underlying <see cref="IChatClient"/> responds with <see cref="ChatResponse.ChatThreadId"/>
-    /// set to a non-<see langword="null"/> value, this property may be ignored and behave as if it is
-    /// <see langword="false"/>, with any such intermediate messages not stored in the messages list.
-    /// </para>
-    /// </remarks>
-    public bool KeepFunctionCallingContent { get; set; } = true;
-
-    /// <summary>
     /// Gets or sets the maximum number of iterations per request.
     /// </summary>
     /// <value>
@@ -276,27 +242,6 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                 }
                 else
                 {
-                    // Otherwise, we need to add the response message to the history we're sending back. However, if the caller
-                    // doesn't want the intermediate messages, create a new list that we mutate instead of mutating the original.
-                    if (!KeepFunctionCallingContent)
-                    {
-                        // Create a new list that will include the message with the function call contents.
-                        if (chatMessages == originalChatMessages)
-                        {
-                            chatMessages = [.. chatMessages];
-                        }
-
-                        // We want to include any non-functional calling content, if there is any,
-                        // in the caller's list so that they don't lose out on actual content.
-                        // This can happen but is relatively rare.
-                        if (response.Message.Contents.Any(c => c is not FunctionCallContent))
-                        {
-                            var clone = response.Message.Clone();
-                            clone.Contents = clone.Contents.Where(c => c is not FunctionCallContent).ToList();
-                            originalChatMessages.Add(clone);
-                        }
-                    }
-
                     // Add the original response message into the history.
                     chatMessages.Add(response.Message);
                 }
@@ -306,7 +251,7 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                 if (UpdateOptionsForMode(modeAndMessages.Mode, ref options, response.ChatThreadId))
                 {
                     // Terminate
-                    return response;
+                    break;
                 }
             }
 
@@ -321,6 +266,31 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         }
     }
 
+    // Streaming implementation note:
+    // The streaming implementation is a bit more complex than the non-streaming one, as the semantics around it are challenging.
+    // The non-streaming implementation is able to manage the chat history: if a response contains a function call content, it adds
+    // the response into the history, adds the function call result, and turns the crank; if it doesn't, it just returns the response.
+    // The streaming implementation, however, can't just add in the response like this. To know whether the response contains a function
+    // call, it would need to see the whole response, and if it avoids yielding messages until then, it's no longer streaming. So it
+    // needs to yield the updates as they arrive, but also keep track of them.
+    //
+    // As is the case with non-streaming, the consumer is responsible for adding the final content to the chat history, but with streaming,
+    // the consumer doesn't know which part of the streamed updates are part of the final response, which means the FunctionInvokingChatClient
+    // shouldn't add anything it's yielded to the chat history, because the client may be adding that content again and it'll end up being
+    // duplicated. It could hold back the function calling content, yielding everything else and adding only the function call content, but
+    // that then results in things being out of order in the history, which can cause problems for systems that care (such as if thinking content
+    // that resulted in function call content needs to precede that function call content). It also means that the consumer isn't aware of
+    // function call content until after the whole function calling interaction has completed, which means a consumer can't use this to update
+    // a UI or otherwise provide notifications of things progressing.
+    //
+    // The solution FunctionInvokingChatClient employs, then, is to yield everything and to not add anything to the caller's history. For
+    // the purposes of continuing the conversation with the inner client, it maintains its own shadow history, which it updates with all the
+    // content it gets back from the inner client along with tool results. It's then up to the client to add all of the streamed content
+    // into history. However, if only the response content was yielded, that would leave function call content without corresponding function
+    // result content. To address this, FunctionInvokingChatClient also yields the function result content it produces. This does have a downside,
+    // which is that it muddies the water around updates having different roles (tool vs assistant). Consumers need to be aware of that, e.g.
+    // using the AddRange extension method that will appropriately split the updates into multiple messages.
+
     /// <inheritdoc/>
     public override async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IList<ChatMessage> chatMessages, ChatOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
@@ -331,38 +301,18 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         // Create an activity to group them together for better observability.
         using Activity? activity = _activitySource?.StartActivity(nameof(FunctionInvokingChatClient));
 
-        List<FunctionCallContent> functionCallContents = [];
+        List<FunctionCallContent>? functionCallContents = null;
+        List<ChatResponseUpdate>? updates = null;
+        bool replacedChatMessages = false;
         int? choice;
-        IList<ChatMessage> originalChatMessages = chatMessages;
         for (int iteration = 0; ; iteration++)
         {
             choice = null;
             string? chatThreadId = null;
-            functionCallContents.Clear();
+            functionCallContents?.Clear();
+            updates?.Clear();
             await foreach (var update in base.GetStreamingResponseAsync(chatMessages, options, cancellationToken).ConfigureAwait(false))
             {
-                // We're going to emit all ChatResponseUpdates upstream, even ones that contain function call
-                // content, because a given ChatResponseUpdate can contain other content/metadata. But if we
-                // yield the function calls, and the consumer adds all the content into a message that's then
-                // added into history, they'll end up with function call contents that aren't directly paired
-                // with function result contents, which may cause issues for some models when the history is
-                // later sent again. We thus remove the FunctionCallContent instances from the updates before
-                // yielding them, tracking those FunctionCallContents separately so they can be processed and
-                // added to the chat history.
-
-                // Find all the FCCs. We need to track these separately in order to be able to process them later.
-                int preFccCount = functionCallContents.Count;
-                functionCallContents.AddRange(update.Contents.OfType<FunctionCallContent>());
-
-                // If there were any, remove them from the update. We do this before yielding the update so
-                // that we're not modifying an instance already provided back to the caller.
-                int addedFccs = functionCallContents.Count - preFccCount;
-                if (addedFccs > 0)
-                {
-                    update.Contents = addedFccs == update.Contents.Count ?
-                        [] : update.Contents.Where(c => c is not FunctionCallContent).ToList();
-                }
-
                 // Only one choice is allowed with automatic function calling.
                 if (choice is null)
                 {
@@ -373,7 +323,19 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                     ThrowForMultipleChoices();
                 }
 
+                // Track whether we got a response chat thread id. This is used to determine whether the service
+                // is tracking the state of the conversation such that we shouldn't re-send what it's sent to us.
                 chatThreadId ??= update.ChatThreadId;
+
+                // If the server isn't maintaining state, track all updates so we can compose them into a message
+                // we send back as part of the history.
+                if (chatThreadId is null)
+                {
+                    (updates ??= []).Add(update);
+                }
+
+                // Separately, track the function call contents that we'll need to respond to.
+                (functionCallContents ??= []).AddRange(update.Contents.OfType<FunctionCallContent>());
 
                 yield return update;
                 Activity.Current = activity; // workaround for https://github.com/dotnet/runtime/issues/47802
@@ -388,34 +350,50 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                 break;
             }
 
-            // Update the chat history. If the underlying client is tracking the state, then we want to avoid re-sending
-            // what we already sent as well as this response message, so create a new list to store the response message(s).
+            // Update our chat history to account for everything we've received.
             if (chatThreadId is not null)
             {
-                if (chatMessages == originalChatMessages)
+                // The inner client is telling us it already has all the state, so clear out anything we have.
+                if (replacedChatMessages)
                 {
-                    chatMessages = [];
+                    chatMessages.Clear();
                 }
                 else
                 {
-                    chatMessages.Clear();
+                    chatMessages = [];
+                    replacedChatMessages = true;
                 }
             }
             else
             {
-                // Otherwise, we need to add the response message to the history we're sending back. However, if the caller
-                // doesn't want the intermediate messages, create a new list that we mutate instead of mutating the original.
-                if (chatMessages == originalChatMessages && !KeepFunctionCallingContent)
+                // The inner client isn't tracking the state, so we need to compose a message from all the updates.
+                Debug.Assert(updates?.Count > 0, "If updates were empty, we wouldn't have any function call contents.");
+                if (!replacedChatMessages)
                 {
                     chatMessages = [.. chatMessages];
+                    replacedChatMessages = true;
                 }
 
-                // Add a manufactured response message containing the function call contents to the chat history.
-                chatMessages.Add(new(ChatRole.Assistant, [.. functionCallContents]));
+                chatMessages.AddRange(updates!);
             }
 
             // Process all of the functions, adding their results into the history.
             var modeAndMessages = await ProcessFunctionCallsAsync(chatMessages, options, functionCallContents, iteration, cancellationToken).ConfigureAwait(false);
+
+            // Yield any created content. It's already been added into the shadow history that's now chatMessages.
+            foreach (var message in modeAndMessages.MessagesAdded)
+            {
+                yield return new()
+                {
+                    AuthorName = message.AuthorName,
+                    Role = message.Role,
+                    Contents = message.Contents,
+                    AdditionalProperties = message.AdditionalProperties,
+                    ChatThreadId = chatThreadId,
+                };
+                Activity.Current = activity; // workaround for https://github.com/dotnet/runtime/issues/47802
+            }
+
             if (UpdateOptionsForMode(modeAndMessages.Mode, ref options, chatThreadId))
             {
                 // Terminate

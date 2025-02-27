@@ -165,7 +165,8 @@ await foreach (var update in client.GetStreamingResponseAsync("What is AI?"))
 }
 ```
 
-Such a stream of response updates may be combined into a single response object via the `ToChatResponse` and `ToChatResponseAsync` helper methods, e.g.
+Such a stream of response updates may be added into a list of messages with the `AddRange` extension method. It will coalesce
+the updates into `ChatMessage` instances that are appended to an `IList<ChatMessage>`.
 
 ```csharp
 List<ChatMessage> history = [];
@@ -182,7 +183,7 @@ while (true)
         updates.Add(update);
     }
 
-    history.Add(updates.ToChatResponse().Message));
+    history.AddRange(updates);
 }
 ```
 
@@ -525,6 +526,37 @@ while (true)
     else
     {
         history.Add(response.Message);
+    }
+}
+```
+
+With streaming, the same approach can be used, with the last update that provides a `ChatThreadId` being used to update the options.
+```csharp
+List<ChatMessage> history = [];
+ChatOptions options = new();
+while (true)
+{
+    Console.Write("Q: ");
+    history.Add(new(ChatRole.User, Console.ReadLine()));
+    
+    List<ChatResponseUpdate> updates = [];
+    await foreach (var update in client.GetStreamingResponseAsync(history))
+    {
+        updates.Add(update);
+        if (update.Text is string text)
+        {
+            Console.Write(text);
+        }
+    }
+
+    options.ChatThreadId = updates.Where(u => u.ChatThreadId is not null).LastOrDefault()?.ChatThreadId;
+    if (response.ChatThreadId is not null)
+    {
+        history.Clear();
+    }
+    else
+    {
+        history.AddRange(updates);
     }
 }
 ```

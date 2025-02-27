@@ -75,10 +75,10 @@ public abstract class CachingChatClient : DelegatingChatClient
             // we make a streaming request, yielding those results, but then convert those into a non-streaming
             // result and cache it. When we get a cache hit, we yield the non-streaming result as a streaming one.
 
-            var cacheKey = GetCacheKey(_boxedTrue, chatMessages, options);
-            if (await ReadCacheAsync(cacheKey, cancellationToken).ConfigureAwait(false) is { } chatResponse)
+            // First see if we have a cached non-streaming response, in which case we can yield it as a small number of updates.
+            var nonStreamingCacheKey = GetCacheKey(_boxedFalse, chatMessages, options);
+            if (await ReadCacheAsync(nonStreamingCacheKey, cancellationToken).ConfigureAwait(false) is { } chatResponse)
             {
-                // Yield all of the cached items.
                 foreach (var chunk in chatResponse.ToChatResponseUpdates())
                 {
                     yield return chunk;
@@ -86,16 +86,49 @@ public abstract class CachingChatClient : DelegatingChatClient
             }
             else
             {
-                // Yield and store all of the items.
-                List<ChatResponseUpdate> capturedItems = [];
-                await foreach (var chunk in base.GetStreamingResponseAsync(chatMessages, options, cancellationToken).ConfigureAwait(false))
+                // If we don't have one of those, see if we have a cached streaming response.
+                var streamingCacheKey = GetCacheKey(_boxedTrue, chatMessages, options);
+                if (await ReadCacheStreamingAsync(streamingCacheKey, cancellationToken).ConfigureAwait(false) is { } existingUpdates)
                 {
-                    capturedItems.Add(chunk);
-                    yield return chunk;
+                    foreach (var chunk in existingUpdates)
+                    {
+                        yield return chunk;
+                    }
                 }
+                else
+                {
+                    // Nothing was cached. Make the actual request, yielding and storing all of the items.
+                    List<ChatResponseUpdate> capturedItems = [];
+                    await foreach (var chunk in base.GetStreamingResponseAsync(chatMessages, options, cancellationToken).ConfigureAwait(false))
+                    {
+                        capturedItems.Add(chunk);
+                        yield return chunk;
+                    }
 
-                // Write the captured items to the cache as a non-streaming result.
-                await WriteCacheAsync(cacheKey, capturedItems.ToChatResponse(), cancellationToken).ConfigureAwait(false);
+                    // Cache the captured items. If it contains multiple roles so it can't be merged into a single response,
+                    // cache it as streaming. Otherwise, merge it and cache as a non-streaming result.
+                    await (AllUpdatesShareSameRole(capturedItems) ?
+                        WriteCacheAsync(nonStreamingCacheKey, capturedItems.ToChatResponse(), cancellationToken) :
+                        WriteCacheStreamingAsync(streamingCacheKey, capturedItems, cancellationToken)).ConfigureAwait(false);
+
+                    static bool AllUpdatesShareSameRole(List<ChatResponseUpdate> updates)
+                    {
+                        ChatRole? firstRole = null;
+                        foreach (var update in updates)
+                        {
+                            if (firstRole is null)
+                            {
+                                firstRole = update.Role;
+                            }
+                            else if (update.Role != firstRole && update.Role is not null)
+                            {
+                                return false;
+                            }
+                        }
+
+                        return true;
+                    }
+                }
             }
         }
         else

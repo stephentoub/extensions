@@ -235,26 +235,6 @@ public class DistributedCachingChatClientTest
             }
         ];
 
-        List<ChatResponseUpdate> expectedCachedResponse =
-        [
-            new()
-            {
-                Role = new ChatRole("fakeRole2"),
-                Contents = [new FunctionCallContent("someCallId", "someFn", new Dictionary<string, object?> { ["arg1"] = "value1" })],
-            },
-            new()
-            {
-                Role = new ChatRole("fakeRole1"),
-                ChoiceIndex = 1,
-                AdditionalProperties = new() { ["a"] = "b" },
-                Contents = [new TextContent("Chunk1")]
-            },
-            new()
-            {
-                Contents = [new UsageContent(new() { InputTokenCount = 123, OutputTokenCount = 456, TotalTokenCount = 99999 })],
-            },
-        ];
-
         var innerCallCount = 0;
         using var testClient = new TestChatClient
         {
@@ -279,7 +259,7 @@ public class DistributedCachingChatClientTest
 
         // Assert
         Assert.Equal(1, innerCallCount);
-        await AssertResponsesEqualAsync(expectedCachedResponse, result2);
+        await AssertResponsesEqualAsync(actualUpdate, result2);
 
         // Act/Assert 2: Cache misses do not return cached results
         await ToListAsync(outer.GetStreamingResponseAsync("some modified input"));

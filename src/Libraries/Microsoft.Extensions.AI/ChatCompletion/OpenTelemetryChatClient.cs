@@ -204,7 +204,14 @@ public sealed partial class OpenTelemetryChatClient : DelegatingChatClient
         }
         finally
         {
-            TraceResponse(activity, requestModelId, trackedUpdates.ToChatResponse(), error, stopwatch);
+            // Generally OpenTelemetryChatClient will be used late in a pipeline, after any function calling
+            // components, and as such, it's expected that all updates can be converted into a single consistent
+            // response compatible with telemetry. If this is not the case, the result should still suffice for
+            // telemetry purposes, albeit possibly with some unexpected content (e.g. the assistant response may
+            // contain a FunctionResponseContent).
+            ChatResponse response = trackedUpdates.ToChatResponse();
+
+            TraceResponse(activity, requestModelId, response, error, stopwatch);
 
             await responseEnumerator.DisposeAsync();
         }
