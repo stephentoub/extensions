@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
@@ -41,12 +42,15 @@ public sealed class ConfigureOptionsEmbeddingGenerator<TInput, TEmbedding> : Del
     }
 
     /// <inheritdoc/>
-    public override async Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(
+    public override async IAsyncEnumerable<TEmbedding> GenerateAsync(
         IEnumerable<TInput> values,
         EmbeddingGenerationOptions? options = null,
-        CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        return await base.GenerateAsync(values, Configure(options), cancellationToken).ConfigureAwait(false);
+        await foreach (var e in base.GenerateAsync(values, Configure(options), cancellationToken).ConfigureAwait(false))
+        {
+            yield return e;
+        }
     }
 
     /// <summary>Creates and configures the <see cref="EmbeddingGenerationOptions"/> to pass along to the inner client.</summary>

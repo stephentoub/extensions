@@ -21,6 +21,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <Compile Include="..\Microsoft.Extensions.AI.Abstractions.Tests\AsyncEnumerableHelpers.cs" />
     <Compile Include="..\Microsoft.Extensions.AI.Abstractions.Tests\TestChatClient.cs" />
   </ItemGroup>
 

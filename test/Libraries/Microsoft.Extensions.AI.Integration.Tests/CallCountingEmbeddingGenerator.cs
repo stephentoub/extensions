@@ -3,7 +3,6 @@
 
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 
 #pragma warning disable SA1204 // Static elements should appear before instance elements
 #pragma warning disable SA1402 // File may only contain a single type
@@ -17,7 +16,7 @@ internal sealed class CallCountingEmbeddingGenerator(IEmbeddingGenerator<string,
 
     public int CallCount => _callCount;
 
-    public override Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
+    public override IAsyncEnumerable<Embedding<float>> GenerateAsync(
         IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
     {
         Interlocked.Increment(ref _callCount);

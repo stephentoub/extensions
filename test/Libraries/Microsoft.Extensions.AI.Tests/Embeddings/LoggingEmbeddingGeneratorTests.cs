@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -55,7 +56,7 @@ public class LoggingEmbeddingGeneratorTests
         {
             GenerateAsyncCallback = (values, options, cancellationToken) =>
             {
-                return Task.FromResult(new GeneratedEmbeddings<Embedding<float>>([new Embedding<float>(new float[] { 1f, 2f, 3f })]));
+                return new[] { new Embedding<float>(new float[] { 1f, 2f, 3f }) }.ToAsyncEnumerable();
             },
         };
 

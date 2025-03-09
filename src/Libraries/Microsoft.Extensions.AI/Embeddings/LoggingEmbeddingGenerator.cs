@@ -46,7 +46,8 @@ public partial class LoggingEmbeddingGenerator<TInput, TEmbedding> : DelegatingE
     }
 
     /// <inheritdoc/>
-    public override async Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    public override async IAsyncEnumerable<TEmbedding> GenerateAsync(
+        IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         if (_logger.IsEnabled(LogLevel.Debug))
         {
@@ -60,13 +61,10 @@ public partial class LoggingEmbeddingGenerator<TInput, TEmbedding> : DelegatingE
             }
         }
 
+        IAsyncEnumerator<TEmbedding> enumerator;
         try
         {
-            var embeddings = await base.GenerateAsync(values, options, cancellationToken).ConfigureAwait(false);
-
-            LogCompleted(embeddings.Count);
-
-            return embeddings;
+            enumerator = base.GenerateAsync(values, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
         }
         catch (OperationCanceledException)
         {
@@ -77,6 +75,39 @@ public partial class LoggingEmbeddingGenerator<TInput, TEmbedding> : DelegatingE
         {
             LogInvocationFailed(ex);
             throw;
+        }
+
+        try
+        {
+            int count = 0;
+            while (true)
+            {
+                try
+                {
+                    if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                    {
+                        LogCompleted(count);
+                        break;
+                    }
+                }
+                catch (OperationCanceledException)
+                {
+                    LogInvocationCanceled();
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    LogInvocationFailed(ex);
+                    throw;
+                }
+
+                count++;
+                yield return enumerator.Current;
+            }
+        }
+        finally
+        {
+            await enumerator.DisposeAsync().ConfigureAwait(false);
         }
     }
 

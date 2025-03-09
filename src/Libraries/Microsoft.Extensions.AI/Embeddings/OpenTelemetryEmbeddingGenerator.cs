@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -83,7 +84,8 @@ public sealed class OpenTelemetryEmbeddingGenerator<TInput, TEmbedding> : Delega
         base.GetService(serviceType, serviceKey);
 
     /// <inheritdoc/>
-    public override async Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    public override async IAsyncEnumerable<TEmbedding> GenerateAsync(
+        IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _ = Throw.IfNull(values);
 
@@ -91,23 +93,48 @@ public sealed class OpenTelemetryEmbeddingGenerator<TInput, TEmbedding> : Delega
         Stopwatch? stopwatch = _operationDurationHistogram.Enabled ? Stopwatch.StartNew() : null;
         string? requestModelId = options?.ModelId ?? _modelId;
 
-        GeneratedEmbeddings<TEmbedding>? response = null;
-        Exception? error = null;
+        IAsyncEnumerator<TEmbedding> enumerator;
         try
         {
-            response = await base.GenerateAsync(values, options, cancellationToken).ConfigureAwait(false);
+            enumerator = base.GenerateAsync(values, options, cancellationToken).GetAsyncEnumerator(cancellationToken);
         }
         catch (Exception ex)
         {
-            error = ex;
+            TraceResponse(activity, requestModelId, null, ex, stopwatch);
             throw;
+        }
+
+        List<TEmbedding> embeddings = [];
+        Exception? error = null;
+        try
+        {
+            while (true)
+            {
+                try
+                {
+                    if (!await enumerator.MoveNextAsync().ConfigureAwait(false))
+                    {
+                        break;
+                    }
+                }
+                catch (Exception ex)
+                {
+                    error = ex;
+                    throw;
+                }
+
+                TEmbedding embedding = enumerator.Current;
+                embeddings.Add(embedding);
+
+                yield return embedding;
+                Activity.Current = activity; // workaround for https://github.com/dotnet/runtime/issues/47802
+            }
         }
         finally
         {
-            TraceResponse(activity, requestModelId, response, error, stopwatch);
+            TraceResponse(activity, requestModelId, embeddings, error, stopwatch);
+            await enumerator.DisposeAsync().ConfigureAwait(false);
         }
-
-        return response;
     }
 
     /// <inheritdoc/>
@@ -180,19 +207,18 @@ public sealed class OpenTelemetryEmbeddingGenerator<TInput, TEmbedding> : Delega
     private void TraceResponse(
         Activity? activity,
         string? requestModelId,
-        GeneratedEmbeddings<TEmbedding>? embeddings,
+        List<TEmbedding>? embeddings,
         Exception? error,
         Stopwatch? stopwatch)
     {
         int? inputTokens = null;
         string? responseModelId = null;
-        if (embeddings is not null)
+        TEmbedding? firstEmbedding = embeddings?.FirstOrDefault();
+
+        if (firstEmbedding is TEmbedding first)
         {
-            responseModelId = embeddings.FirstOrDefault()?.ModelId;
-            if (embeddings.Usage?.InputTokenCount is long i)
-            {
-                inputTokens = inputTokens.GetValueOrDefault() + (int)i;
-            }
+            responseModelId = first.ModelId;
+            inputTokens = first.Usage?.InputTokenCount is long i ? (int)i : null;
         }
 
         if (_operationDurationHistogram.Enabled && stopwatch is not null)
@@ -239,7 +265,7 @@ public sealed class OpenTelemetryEmbeddingGenerator<TInput, TEmbedding> : Delega
             // there's a per-provider specification in a best-effort manner (e.g. gen_ai.openai.response.system_fingerprint),
             // and more generally cases where there's additional useful information to be logged.
             if (_system is not null &&
-                embeddings?.AdditionalProperties is { } props)
+                firstEmbedding?.AdditionalProperties is { } props)
             {
                 foreach (KeyValuePair<string, object?> prop in props)
                 {

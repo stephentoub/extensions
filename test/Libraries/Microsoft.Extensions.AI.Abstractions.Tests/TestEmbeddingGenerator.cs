@@ -4,7 +4,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 
 #pragma warning disable SA1402 // File may only contain a single type
 #pragma warning disable CA1816 // Dispose methods should call SuppressFinalize
@@ -19,14 +18,14 @@ public class TestEmbeddingGenerator<TInput, TEmbedding> : IEmbeddingGenerator<TI
         GetServiceCallback = DefaultGetServiceCallback;
     }
 
-    public Func<IEnumerable<TInput>, EmbeddingGenerationOptions?, CancellationToken, Task<GeneratedEmbeddings<TEmbedding>>>? GenerateAsyncCallback { get; set; }
+    public Func<IEnumerable<TInput>, EmbeddingGenerationOptions?, CancellationToken, IAsyncEnumerable<TEmbedding>>? GenerateAsyncCallback { get; set; }
 
     public Func<Type, object?, object?> GetServiceCallback { get; set; }
 
     private object? DefaultGetServiceCallback(Type serviceType, object? serviceKey) =>
         serviceType is not null && serviceKey is null && serviceType.IsInstanceOfType(this) ? this : null;
 
-    public Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    public IAsyncEnumerable<TEmbedding> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
         => GenerateAsyncCallback!.Invoke(values, options, cancellationToken);
 
     public object? GetService(Type serviceType, object? serviceKey = null)

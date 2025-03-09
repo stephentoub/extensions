@@ -2,12 +2,15 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
+
+#pragma warning disable S108 // Nested blocks of code should not be left empty
 
 namespace Microsoft.Extensions.AI;
 
@@ -34,7 +37,7 @@ public class DistributedCachingEmbeddingGeneratorTest
             GenerateAsyncCallback = (values, options, cancellationToken) =>
             {
                 innerCallCount++;
-                return Task.FromResult<GeneratedEmbeddings<Embedding<float>>>([_expectedEmbedding]);
+                return new[] { _expectedEmbedding }.ToAsyncEnumerable();
             },
         };
         using var outer = new DistributedCachingEmbeddingGenerator<string, Embedding<float>>(testGenerator, _storage)
@@ -55,7 +58,10 @@ public class DistributedCachingEmbeddingGeneratorTest
         AssertEmbeddingsEqual(_expectedEmbedding, result2);
 
         // Act/Assert 2: Cache misses do not return cached results
-        await outer.GenerateAsync(["def"]);
+        await foreach (var e in outer.GenerateAsync(["def"]))
+        {
+        }
+
         Assert.Equal(2, innerCallCount);
     }
 
@@ -80,7 +86,7 @@ public class DistributedCachingEmbeddingGeneratorTest
             {
                 innerCallCount++;
                 Assert.Equal(innerCallCount == 1 ? 4 : 6, values.Count());
-                return Task.FromResult<GeneratedEmbeddings<Embedding<float>>>(new(values.Select(i => expected[int.Parse(i)])));
+                return values.Select(i => expected[int.Parse(i)]).ToAsyncEnumerable();
             },
         };
         using var outer = new DistributedCachingEmbeddingGenerator<string, Embedding<float>>(testGenerator, _storage)
@@ -89,7 +95,7 @@ public class DistributedCachingEmbeddingGeneratorTest
         };
 
         // Make initial requests for some of the values
-        var results = await outer.GenerateAsync(["0", "4", "5", "8"]);
+        var results = await outer.GenerateAsync(["0", "4", "5", "8"]).ToListAsync();
         Assert.Equal(1, innerCallCount);
         Assert.Equal(4, results.Count);
         AssertEmbeddingsEqual(expected[0], results[0]);
@@ -98,14 +104,14 @@ public class DistributedCachingEmbeddingGeneratorTest
         AssertEmbeddingsEqual(expected[8], results[3]);
 
         // Act/Assert
-        results = await outer.GenerateAsync(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+        results = await outer.GenerateAsync(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]).ToListAsync();
         Assert.Equal(2, innerCallCount);
         for (int i = 0; i < 10; i++)
         {
             AssertEmbeddingsEqual(expected[i], results[i]);
         }
 
-        results = await outer.GenerateAsync(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]);
+        results = await outer.GenerateAsync(["0", "1", "2", "3", "4", "5", "6", "7", "8", "9"]).ToListAsync();
         Assert.Equal(2, innerCallCount);
         for (int i = 0; i < 10; i++)
         {
@@ -121,11 +127,10 @@ public class DistributedCachingEmbeddingGeneratorTest
         var completionTcs = new TaskCompletionSource<bool>();
         using var innerGenerator = new TestEmbeddingGenerator
         {
-            GenerateAsyncCallback = async (value, options, cancellationToken) =>
+            GenerateAsyncCallback = (value, options, cancellationToken) =>
             {
                 innerCallCount++;
-                await completionTcs.Task;
-                return [_expectedEmbedding];
+                return AwaitThenYield(completionTcs.Task, [_expectedEmbedding]);
             }
         };
         using var outer = new DistributedCachingEmbeddingGenerator<string, Embedding<float>>(innerGenerator, _storage)
@@ -190,15 +195,17 @@ public class DistributedCachingEmbeddingGeneratorTest
         var resolutionTcs = new TaskCompletionSource<bool>();
         using var innerGenerator = new TestEmbeddingGenerator
         {
-            GenerateAsyncCallback = async (value, options, cancellationToken) =>
+            GenerateAsyncCallback = (value, options, cancellationToken) =>
             {
                 innerCallCount++;
+
+                Task? toAwait = null;
                 if (innerCallCount == 1)
                 {
-                    await resolutionTcs.Task;
+                    toAwait = resolutionTcs.Task;
                 }
 
-                return [_expectedEmbedding];
+                return AwaitThenYield(toAwait, [_expectedEmbedding]);
             }
         };
         using var outer = new DistributedCachingEmbeddingGenerator<string, Embedding<float>>(innerGenerator, _storage)
@@ -228,11 +235,10 @@ public class DistributedCachingEmbeddingGeneratorTest
         var completionTcs = new TaskCompletionSource<bool>();
         using var innerGenerator = new TestEmbeddingGenerator
         {
-            GenerateAsyncCallback = async (value, options, cancellationToken) =>
+            GenerateAsyncCallback = (value, options, cancellationToken) =>
             {
                 innerCallCount++;
-                await Task.Yield();
-                return [new(((string)options!.AdditionalProperties!["someKey"]!).Select(c => (float)c).ToArray())];
+                return new[] { new Embedding<float>(((string)options!.AdditionalProperties!["someKey"]!).Select(c => (float)c).ToArray()) }.ToAsyncEnumerable();
             }
         };
         using var outer = new DistributedCachingEmbeddingGenerator<string, Embedding<float>>(innerGenerator, _storage)
@@ -279,11 +285,10 @@ public class DistributedCachingEmbeddingGeneratorTest
         var completionTcs = new TaskCompletionSource<bool>();
         using var innerGenerator = new TestEmbeddingGenerator
         {
-            GenerateAsyncCallback = async (value, options, cancellationToken) =>
+            GenerateAsyncCallback = (value, options, cancellationToken) =>
             {
                 innerCallCount++;
-                await Task.Yield();
-                return [_expectedEmbedding];
+                return new[] { _expectedEmbedding }.ToAsyncEnumerable();
             }
         };
         using var outer = new CachingEmbeddingGeneratorWithCustomKey(innerGenerator, _storage)
@@ -317,9 +322,7 @@ public class DistributedCachingEmbeddingGeneratorTest
         using var testGenerator = new TestEmbeddingGenerator
         {
             GenerateAsyncCallback = (values, options, cancellationToken) =>
-            {
-                return Task.FromResult<GeneratedEmbeddings<Embedding<float>>>([_expectedEmbedding]);
-            },
+                new[] { _expectedEmbedding }.ToAsyncEnumerable()
         };
         using var outer = testGenerator
             .AsBuilder()
@@ -336,6 +339,19 @@ public class DistributedCachingEmbeddingGeneratorTest
         // Assert
         Assert.NotNull(result);
         Assert.Single(_storage.Keys);
+    }
+
+    private static async IAsyncEnumerable<Embedding<float>> AwaitThenYield(Task? toAwait, IEnumerable<Embedding<float>> toYield)
+    {
+        if (toAwait is not null)
+        {
+            await toAwait;
+        }
+
+        foreach (var e in toYield)
+        {
+            yield return e;
+        }
     }
 
     private static void AssertEmbeddingsEqual(Embedding<float> expected, Embedding<float> actual)

@@ -4,7 +4,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
 
 namespace Microsoft.Extensions.AI;
@@ -41,7 +40,7 @@ public class DelegatingEmbeddingGenerator<TInput, TEmbedding> : IEmbeddingGenera
     }
 
     /// <inheritdoc />
-    public virtual Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default) =>
+    public virtual IAsyncEnumerable<TEmbedding> GenerateAsync(IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default) =>
         InnerGenerator.GenerateAsync(values, options, cancellationToken);
 
     /// <inheritdoc />

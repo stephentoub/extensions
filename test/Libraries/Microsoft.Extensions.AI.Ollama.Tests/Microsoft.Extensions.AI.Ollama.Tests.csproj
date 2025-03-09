@@ -10,6 +10,7 @@
 
   <ItemGroup>
     <Compile Include="..\Microsoft.Extensions.AI.Abstractions.Tests\AssertExtensions.cs" />
+    <Compile Include="..\Microsoft.Extensions.AI.Abstractions.Tests\AsyncEnumerableHelpers.cs" />
   </ItemGroup>
 
   <ItemGroup>

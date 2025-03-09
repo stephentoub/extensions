@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Linq;
 using System.Net.Http;
 using System.Threading.Tasks;
 using Azure;
@@ -118,13 +119,13 @@ public class AzureAIInferenceEmbeddingGeneratorTests
         var response = await generator.GenerateAsync([
             "hello, world!",
             "red, white, blue",
-        ]);
+        ]).ToListAsync();
         Assert.NotNull(response);
         Assert.Equal(2, response.Count);
 
-        Assert.NotNull(response.Usage);
-        Assert.Equal(9, response.Usage.InputTokenCount);
-        Assert.Equal(9, response.Usage.TotalTokenCount);
+        Assert.NotNull(response.FirstOrDefault()?.Usage);
+        Assert.Equal(9, response.FirstOrDefault()?.Usage?.InputTokenCount);
+        Assert.Equal(9, response.FirstOrDefault()?.Usage?.TotalTokenCount);
 
         foreach (Embedding<float> e in response)
         {

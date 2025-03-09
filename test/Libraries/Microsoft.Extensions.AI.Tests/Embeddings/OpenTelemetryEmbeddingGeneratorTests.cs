@@ -4,7 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Runtime.CompilerServices;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Testing;
@@ -30,22 +30,24 @@ public class OpenTelemetryEmbeddingGeneratorTests
 
         using var innerGenerator = new TestEmbeddingGenerator
         {
-            GenerateAsyncCallback = async (values, options, cancellationToken) =>
+            GenerateAsyncCallback = (values, options, cancellationToken) =>
             {
-                await Task.Yield();
-                return new GeneratedEmbeddings<Embedding<float>>([new Embedding<float>(new float[] { 1, 2, 3 })])
+                return new[]
                 {
-                    Usage = new()
+                    new Embedding<float>(new float[] { 1, 2, 3 })
                     {
-                        InputTokenCount = 10,
-                        TotalTokenCount = 10,
-                    },
-                    AdditionalProperties = new()
-                    {
-                        ["system_fingerprint"] = "abcdefgh",
-                        ["AndSomethingElse"] = "value2",
+                        Usage = new()
+                        {
+                            InputTokenCount = 10,
+                            TotalTokenCount = 10,
+                        },
+                        AdditionalProperties = new()
+                        {
+                            ["system_fingerprint"] = "abcdefgh",
+                            ["AndSomethingElse"] = "value2",
+                        }
                     }
-                };
+                }.ToAsyncEnumerable();
             },
             GetServiceCallback = (serviceType, serviceKey) =>
                 serviceType == typeof(EmbeddingGeneratorMetadata) ? new EmbeddingGeneratorMetadata("testservice", new Uri("http://localhost:12345/something"), "amazingmodel", 384) :

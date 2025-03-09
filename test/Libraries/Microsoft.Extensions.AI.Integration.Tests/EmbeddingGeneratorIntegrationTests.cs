@@ -44,11 +44,12 @@ public abstract class EmbeddingGeneratorIntegrationTests : IDisposable
     {
         SkipIfNotEnabled();
 
-        var embeddings = await _embeddingGenerator.GenerateAsync(["Using AI with .NET"]);
+        var embeddings = await _embeddingGenerator.GenerateAsync(["Using AI with .NET"]).ToListAsync();
 
-        Assert.NotNull(embeddings.Usage);
-        Assert.NotNull(embeddings.Usage.InputTokenCount);
-        Assert.NotNull(embeddings.Usage.TotalTokenCount);
+        UsageDetails? usage = embeddings.FirstOrDefault()?.Usage;
+        Assert.NotNull(usage);
+        Assert.NotNull(usage.InputTokenCount);
+        Assert.NotNull(usage.TotalTokenCount);
         Assert.Single(embeddings);
         Assert.Equal(_embeddingGenerator.GetService<EmbeddingGeneratorMetadata>()?.ModelId, embeddings[0].ModelId);
         Assert.NotEmpty(embeddings[0].Vector.ToArray());
@@ -63,12 +64,13 @@ public abstract class EmbeddingGeneratorIntegrationTests : IDisposable
             "Red",
             "White",
             "Blue",
-        ]);
+        ]).ToListAsync();
 
         Assert.Equal(3, embeddings.Count);
-        Assert.NotNull(embeddings.Usage);
-        Assert.NotNull(embeddings.Usage.InputTokenCount);
-        Assert.NotNull(embeddings.Usage.TotalTokenCount);
+        UsageDetails? usage = embeddings.FirstOrDefault()?.Usage;
+        Assert.NotNull(usage);
+        Assert.NotNull(usage.InputTokenCount);
+        Assert.NotNull(usage.TotalTokenCount);
         Assert.All(embeddings, embedding =>
         {
             Assert.Equal(_embeddingGenerator.GetService<EmbeddingGeneratorMetadata>()?.ModelId, embedding.ModelId);
@@ -140,7 +142,7 @@ public abstract class EmbeddingGeneratorIntegrationTests : IDisposable
             new QuantizationEmbeddingGenerator(
                 CreateEmbeddingGenerator()!);
 
-        var embeddings = await generator.GenerateAsync(["dog", "cat", "fork", "spoon"]);
+        var embeddings = await generator.GenerateAsync(["dog", "cat", "fork", "spoon"]).ToListAsync();
         Assert.Equal(4, embeddings.Count);
 
         long[,] distances = new long[embeddings.Count, embeddings.Count];
@@ -177,7 +179,7 @@ public abstract class EmbeddingGeneratorIntegrationTests : IDisposable
             new QuantizationEmbeddingGenerator(
                 CreateEmbeddingGenerator()!);
 
-        var embeddings = await generator.GenerateAsync(["dog", "cat", "fork", "spoon"]);
+        var embeddings = await generator.GenerateAsync(["dog", "cat", "fork", "spoon"]).ToListAsync();
         Assert.Equal(4, embeddings.Count);
 
         var distances = new Half[embeddings.Count, embeddings.Count];

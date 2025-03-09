@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Json;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
@@ -82,8 +83,8 @@ public sealed class OllamaEmbeddingGenerator : IEmbeddingGenerator<string, Embed
     }
 
     /// <inheritdoc />
-    public async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
-        IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<Embedding<float>> GenerateAsync(
+        IEnumerable<string> values, EmbeddingGenerationOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _ = Throw.IfNull(values);
 
@@ -152,14 +153,16 @@ public sealed class OllamaEmbeddingGenerator : IEmbeddingGenerator<string, Embed
             };
         }
 
-        return new(response.Embeddings.Select(e =>
-            new Embedding<float>(e)
+        foreach (var e in response.Embeddings)
+        {
+            yield return new Embedding<float>(e)
             {
                 CreatedAt = DateTimeOffset.UtcNow,
                 ModelId = response.Model ?? requestModel,
-            }))
-        {
-            Usage = usage,
-        };
+                Usage = usage,
+            };
+
+            usage = null; // include the usage details in only one of the embeddings
+        }
     }
 }

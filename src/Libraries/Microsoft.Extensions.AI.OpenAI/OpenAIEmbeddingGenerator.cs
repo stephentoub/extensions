@@ -3,8 +3,8 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
@@ -97,25 +97,30 @@ public sealed class OpenAIEmbeddingGenerator : IEmbeddingGenerator<string, Embed
     }
 
     /// <inheritdoc />
-    public async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<Embedding<float>> GenerateAsync(
+        IEnumerable<string> values, EmbeddingGenerationOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         OpenAI.Embeddings.EmbeddingGenerationOptions? openAIOptions = ToOpenAIOptions(options);
 
         var embeddings = (await _embeddingClient.GenerateEmbeddingsAsync(values, openAIOptions, cancellationToken).ConfigureAwait(false)).Value;
 
-        return new(embeddings.Select(e =>
-                new Embedding<float>(e.ToFloats())
-                {
-                    CreatedAt = DateTimeOffset.UtcNow,
-                    ModelId = embeddings.Model,
-                }))
+        UsageDetails? usage = new()
         {
-            Usage = new()
-            {
-                InputTokenCount = embeddings.Usage.InputTokenCount,
-                TotalTokenCount = embeddings.Usage.TotalTokenCount
-            },
+            InputTokenCount = embeddings.Usage.InputTokenCount,
+            TotalTokenCount = embeddings.Usage.TotalTokenCount
         };
+
+        foreach (var e in embeddings)
+        {
+            yield return new Embedding<float>(e.ToFloats())
+            {
+                CreatedAt = DateTimeOffset.UtcNow,
+                ModelId = embeddings.Model,
+                Usage = usage
+            };
+
+            usage = null; // include the usage details in only one of the embeddings
+        }
     }
 
     /// <inheritdoc />

@@ -4,7 +4,6 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
-using System.Threading.Tasks;
 
 namespace Microsoft.Extensions.AI;
 
@@ -24,16 +23,16 @@ namespace Microsoft.Extensions.AI;
 /// no <see cref="IEmbeddingGenerator{TInput, TEmbedding}"/> instances are used which might employ such mutation.
 /// </para>
 /// </remarks>
-public interface IEmbeddingGenerator<in TInput, TEmbedding> : IEmbeddingGenerator
+public interface IEmbeddingGenerator<in TInput, out TEmbedding> : IEmbeddingGenerator
     where TEmbedding : Embedding
 {
     /// <summary>Generates embeddings for each of the supplied <paramref name="values"/>.</summary>
     /// <param name="values">The sequence of values for which to generate embeddings.</param>
     /// <param name="options">The embedding generation options with which to configure the request.</param>
     /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests. The default is <see cref="CancellationToken.None"/>.</param>
-    /// <returns>The generated embeddings.</returns>
+    /// <returns>The generated embeddings, corresponding in order to the input <paramref name="values"/>.</returns>
     /// <exception cref="ArgumentNullException"><paramref name="values"/> is <see langword="null"/>.</exception>
-    Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(
+    IAsyncEnumerable<TEmbedding> GenerateAsync(
         IEnumerable<TInput> values,
         EmbeddingGenerationOptions? options = null,
         CancellationToken cancellationToken = default);

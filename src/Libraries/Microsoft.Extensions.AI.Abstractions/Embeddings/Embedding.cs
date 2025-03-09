@@ -29,6 +29,14 @@ public class Embedding
     /// <summary>Gets or sets the model ID using in the creation of the embedding.</summary>
     public string? ModelId { get; set; }
 
+    /// <summary>Gets or sets usage details for the embedding's generation.</summary>
+    /// <remarks>
+    /// If multiple embeddings are created as part of the same batch operation, a service may
+    /// also batch the usage details. In such a case, the details will be part of only one of
+    /// the embeddings in the batch.
+    /// </remarks>
+    public UsageDetails? Usage { get; set; }
+
     /// <summary>Gets or sets any additional properties associated with the embedding.</summary>
     public AdditionalPropertiesDictionary? AdditionalProperties { get; set; }
 }

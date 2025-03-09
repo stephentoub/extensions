@@ -2,6 +2,8 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -32,7 +34,7 @@ public class ConfigureOptionsEmbeddingGeneratorTests
     {
         EmbeddingGenerationOptions? providedOptions = nullProvidedOptions ? null : new() { ModelId = "test" };
         EmbeddingGenerationOptions? returnedOptions = null;
-        GeneratedEmbeddings<Embedding<float>> expectedEmbeddings = [];
+        List<Embedding<float>> expectedEmbeddings = [];
         using CancellationTokenSource cts = new();
 
         using IEmbeddingGenerator<string, Embedding<float>> innerGenerator = new TestEmbeddingGenerator
@@ -41,7 +43,7 @@ public class ConfigureOptionsEmbeddingGeneratorTests
             {
                 Assert.Same(returnedOptions, options);
                 Assert.Equal(cts.Token, cancellationToken);
-                return Task.FromResult(expectedEmbeddings);
+                return expectedEmbeddings.ToAsyncEnumerable();
             }
         };
 
@@ -63,7 +65,7 @@ public class ConfigureOptionsEmbeddingGeneratorTests
             })
             .Build();
 
-        var embeddings = await generator.GenerateAsync([], providedOptions, cts.Token);
-        Assert.Same(expectedEmbeddings, embeddings);
+        var embeddings = await generator.GenerateAsync([], providedOptions, cts.Token).ToListAsync();
+        Assert.Equal(expectedEmbeddings, embeddings);
     }
 }

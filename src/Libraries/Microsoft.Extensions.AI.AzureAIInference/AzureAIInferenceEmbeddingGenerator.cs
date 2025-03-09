@@ -6,8 +6,8 @@ using System.Buffers;
 using System.Buffers.Binary;
 using System.Buffers.Text;
 using System.Collections.Generic;
-using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Threading;
@@ -86,30 +86,34 @@ public sealed class AzureAIInferenceEmbeddingGenerator :
     }
 
     /// <inheritdoc />
-    public async Task<GeneratedEmbeddings<Embedding<float>>> GenerateAsync(
-        IEnumerable<string> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    public async IAsyncEnumerable<Embedding<float>> GenerateAsync(
+        IEnumerable<string> values, EmbeddingGenerationOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         var azureAIOptions = ToAzureAIOptions(values, options, EmbeddingEncodingFormat.Base64);
 
         var embeddings = (await _embeddingsClient.EmbedAsync(azureAIOptions, cancellationToken).ConfigureAwait(false)).Value;
 
-        GeneratedEmbeddings<Embedding<float>> result = new(embeddings.Data.Select(e =>
-            new Embedding<float>(ParseBase64Floats(e.Embedding))
-            {
-                CreatedAt = DateTimeOffset.UtcNow,
-                ModelId = embeddings.Model ?? azureAIOptions.Model,
-            }));
-
+        UsageDetails? usage = null;
         if (embeddings.Usage is not null)
         {
-            result.Usage = new()
+            usage = new()
             {
                 InputTokenCount = embeddings.Usage.PromptTokens,
                 TotalTokenCount = embeddings.Usage.TotalTokens
             };
         }
 
-        return result;
+        foreach (var e in embeddings.Data)
+        {
+            yield return new Embedding<float>(ParseBase64Floats(e.Embedding))
+            {
+                CreatedAt = DateTimeOffset.UtcNow,
+                ModelId = embeddings.Model ?? azureAIOptions.Model,
+                Usage = usage
+            };
+
+            usage = null; // include the usage details in only one of the embeddings
+        }
     }
 
     /// <inheritdoc />

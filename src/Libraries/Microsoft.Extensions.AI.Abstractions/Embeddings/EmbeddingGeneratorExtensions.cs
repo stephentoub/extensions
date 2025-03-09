@@ -4,10 +4,12 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
 
+#pragma warning disable S1751 // Loops with at most one iteration should be refactored
 #pragma warning disable S2302 // "nameof" should be used
 #pragma warning disable S4136 // Method overloads should be grouped together
 
@@ -124,11 +126,11 @@ public static class EmbeddingGeneratorExtensions
     /// </returns>
     /// <exception cref="ArgumentNullException"><paramref name="generator"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="value"/> is <see langword="null"/>.</exception>
-    /// <exception cref="InvalidOperationException">The generator did not produce exactly one embedding.</exception>
+    /// <exception cref="InvalidOperationException">The generator did not produce any embeddings.</exception>
     /// <remarks>
     /// This operations is equivalent to using <see cref="IEmbeddingGenerator{TInput, TEmbedding}.GenerateAsync"/> with a
     /// collection composed of the single <paramref name="value"/> and then returning the first embedding element from the
-    /// resulting <see cref="GeneratedEmbeddings{TEmbedding}"/> collection.
+    /// resulting <see cref="IAsyncEnumerable{TEmbedding}"/>.
     /// </remarks>
     public static async Task<TEmbedding> GenerateEmbeddingAsync<TInput, TEmbedding>(
         this IEmbeddingGenerator<TInput, TEmbedding> generator,
@@ -140,25 +142,34 @@ public static class EmbeddingGeneratorExtensions
         _ = Throw.IfNull(generator);
         _ = Throw.IfNull(value);
 
-        var embeddings = await generator.GenerateAsync([value], options, cancellationToken).ConfigureAwait(false);
-
+        var embeddings = generator.GenerateAsync([value], options, cancellationToken);
         if (embeddings is null)
         {
-            Throw.InvalidOperationException("Embedding generator returned a null collection of embeddings.");
+            Throw.InvalidOperationException("Embedding generator returned a null sequence of embeddings.");
         }
 
-        if (embeddings.Count != 1)
+        var enumerator = embeddings.GetAsyncEnumerator(cancellationToken);
+        try
         {
-            Throw.InvalidOperationException($"Expected the number of embeddings ({embeddings.Count}) to match the number of inputs (1).");
-        }
+            if (enumerator is null)
+            {
+                Throw.InvalidOperationException("Embedding generator returned a null enumerator for embeddings.");
+            }
 
-        TEmbedding embedding = embeddings[0];
-        if (embedding is null)
+            TEmbedding? embedding = null;
+            if (!await enumerator.MoveNextAsync().ConfigureAwait(false) ||
+                (embedding = enumerator.Current) is null ||
+                await enumerator.MoveNextAsync().ConfigureAwait(false))
+            {
+                Throw.InvalidOperationException("Embedding generator did not produce exactly one embedding.");
+            }
+
+            return embedding;
+        }
+        finally
         {
-            Throw.InvalidOperationException("Embedding generator generated a null embedding.");
+            await enumerator.DisposeAsync().ConfigureAwait(false);
         }
-
-        return embedding;
     }
 
     /// <summary>
@@ -175,36 +186,37 @@ public static class EmbeddingGeneratorExtensions
     /// <exception cref="ArgumentNullException"><paramref name="generator"/> is <see langword="null"/>.</exception>
     /// <exception cref="ArgumentNullException"><paramref name="values"/> is <see langword="null"/>.</exception>
     /// <exception cref="InvalidOperationException">The generator did not produce one embedding for each input value.</exception>
-    public static async Task<(TInput Value, TEmbedding Embedding)[]> GenerateAndZipAsync<TInput, TEmbedding>(
+    public static async IAsyncEnumerable<(TInput Value, TEmbedding Embedding)> GenerateAndZipAsync<TInput, TEmbedding>(
         this IEmbeddingGenerator<TInput, TEmbedding> generator,
         IEnumerable<TInput> values,
         EmbeddingGenerationOptions? options = null,
-        CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken cancellationToken = default)
         where TEmbedding : Embedding
     {
         _ = Throw.IfNull(generator);
         _ = Throw.IfNull(values);
 
-        IList<TInput> inputs = values as IList<TInput> ?? values.ToList();
+        IReadOnlyList<TInput> inputs = values as IReadOnlyList<TInput> ?? values.ToList();
         int inputsCount = inputs.Count;
-
-        if (inputsCount == 0)
+        if (inputsCount > 0)
         {
-            return Array.Empty<(TInput, TEmbedding)>();
-        }
+            int i = 0;
+            await foreach (var embedding in generator.GenerateAsync(inputs, options, cancellationToken).ConfigureAwait(false))
+            {
+                if (i >= inputsCount)
+                {
+                    Throw.InvalidOperationException("The generator produced more embeddings than input values.");
+                }
 
-        var embeddings = await generator.GenerateAsync(values, options, cancellationToken).ConfigureAwait(false);
-        if (embeddings.Count != inputsCount)
-        {
-            Throw.InvalidOperationException($"Expected the number of embeddings ({embeddings.Count}) to match the number of inputs ({inputsCount}).");
-        }
+                yield return (inputs[i], embedding);
 
-        var results = new (TInput, TEmbedding)[embeddings.Count];
-        for (int i = 0; i < results.Length; i++)
-        {
-            results[i] = (inputs[i], embeddings[i]);
-        }
+                i++;
+            }
 
-        return results;
+            if (i != inputsCount)
+            {
+                Throw.InvalidOperationException("The generator produced fewer embeddings than input values.");
+            }
+        }
     }
 }

@@ -3,12 +3,13 @@
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
 #if NET
 using System.Numerics.Tensors;
 #endif
 using System.Threading;
 using System.Threading.Tasks;
+
+#pragma warning disable CS8425 // EnumeratorCancellation
 
 namespace Microsoft.Extensions.AI;
 
@@ -31,15 +32,17 @@ internal sealed class QuantizationEmbeddingGenerator :
         serviceKey is null && serviceType.IsInstanceOfType(this) ? this :
         _floatService.GetService(serviceType, serviceKey);
 
-    async Task<GeneratedEmbeddings<BinaryEmbedding>> IEmbeddingGenerator<string, BinaryEmbedding>.GenerateAsync(
+    async IAsyncEnumerable<BinaryEmbedding> IEmbeddingGenerator<string, BinaryEmbedding>.GenerateAsync(
         IEnumerable<string> values, EmbeddingGenerationOptions? options, CancellationToken cancellationToken)
     {
-        var embeddings = await _floatService.GenerateAsync(values, options, cancellationToken).ConfigureAwait(false);
-        return new(from e in embeddings select QuantizeToBinary(e))
+        var embeddings = _floatService.GenerateAsync(values, options, cancellationToken);
+        await foreach (var e in embeddings.ConfigureAwait(false))
         {
-            Usage = embeddings.Usage,
-            AdditionalProperties = embeddings.AdditionalProperties,
-        };
+            var quantized = QuantizeToBinary(e);
+            quantized.Usage = e.Usage;
+            quantized.AdditionalProperties = e.AdditionalProperties;
+            yield return quantized;
+        }
     }
 
     private static BinaryEmbedding QuantizeToBinary(Embedding<float> embedding)
@@ -64,15 +67,17 @@ internal sealed class QuantizationEmbeddingGenerator :
     }
 
 #if NET
-    async Task<GeneratedEmbeddings<Embedding<Half>>> IEmbeddingGenerator<string, Embedding<Half>>.GenerateAsync(
+    async IAsyncEnumerable<Embedding<Half>> IEmbeddingGenerator<string, Embedding<Half>>.GenerateAsync(
         IEnumerable<string> values, EmbeddingGenerationOptions? options, CancellationToken cancellationToken)
     {
-        var embeddings = await _floatService.GenerateAsync(values, options, cancellationToken).ConfigureAwait(false);
-        return new(from e in embeddings select QuantizeToHalf(e))
+        var embeddings = _floatService.GenerateAsync(values, options, cancellationToken);
+        await foreach (var e in embeddings.ConfigureAwait(false))
         {
-            Usage = embeddings.Usage,
-            AdditionalProperties = embeddings.AdditionalProperties,
-        };
+            var quantized = QuantizeToHalf(e);
+            quantized.Usage = e.Usage;
+            quantized.AdditionalProperties = e.AdditionalProperties;
+            yield return quantized;
+        }
     }
 
     private static Embedding<Half> QuantizeToHalf(Embedding<float> embedding)

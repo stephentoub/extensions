@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -24,28 +25,24 @@ public class DelegatingEmbeddingGeneratorTests
         var expectedInput = new List<string>();
         using var cts = new CancellationTokenSource();
         var expectedCancellationToken = cts.Token;
-        var expectedResult = new TaskCompletionSource<GeneratedEmbeddings<Embedding<float>>>();
-        var expectedEmbedding = new GeneratedEmbeddings<Embedding<float>>([new(new float[] { 1.0f, 2.0f, 3.0f })]);
+        Embedding<float>[] expectedEmbedding = [new(new float[] { 1.0f, 2.0f, 3.0f })];
         using var inner = new TestEmbeddingGenerator
         {
             GenerateAsyncCallback = (input, options, cancellationToken) =>
             {
                 Assert.Same(expectedInput, input);
                 Assert.Equal(expectedCancellationToken, cancellationToken);
-                return expectedResult.Task;
+                return expectedEmbedding.ToAsyncEnumerable();
             }
         };
 
         using var delegating = new NoOpDelegatingEmbeddingGenerator(inner);
 
         // Act
-        var resultTask = delegating.GenerateAsync(expectedInput, options: null, expectedCancellationToken);
+        var result = delegating.GenerateAsync(expectedInput, options: null, expectedCancellationToken);
 
         // Assert
-        Assert.False(resultTask.IsCompleted);
-        expectedResult.SetResult(expectedEmbedding);
-        Assert.True(resultTask.IsCompleted);
-        Assert.Same(expectedEmbedding, await resultTask);
+        Assert.Equal(expectedEmbedding, await result.ToListAsync());
     }
 
     [Fact]

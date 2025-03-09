@@ -2,6 +2,7 @@
 // The .NET Foundation licenses this file to you under the MIT license.
 
 using System;
+using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.TestUtilities;
 using Xunit;
@@ -26,7 +27,7 @@ public class OllamaEmbeddingGeneratorIntegrationTests : EmbeddingGeneratorIntegr
         using var generator = new OllamaEmbeddingGenerator(endpoint, modelId: "inexistent-model");
 
         InvalidOperationException ex;
-        ex = await Assert.ThrowsAsync<InvalidOperationException>(() => generator.GenerateAsync(["Hello, world!"]));
+        ex = await Assert.ThrowsAsync<InvalidOperationException>(() => generator.GenerateAsync(["Hello, world!"]).ToListAsync());
         Assert.Contains("inexistent-model", ex.Message);
     }
 }

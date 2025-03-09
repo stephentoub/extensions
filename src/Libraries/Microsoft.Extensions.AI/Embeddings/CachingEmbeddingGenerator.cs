@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
@@ -25,8 +26,8 @@ public abstract class CachingEmbeddingGenerator<TInput, TEmbedding> : Delegating
     }
 
     /// <inheritdoc />
-    public override async Task<GeneratedEmbeddings<TEmbedding>> GenerateAsync(
-        IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    public override async IAsyncEnumerable<TEmbedding> GenerateAsync(
+        IEnumerable<TInput> values, EmbeddingGenerationOptions? options = null, [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
         _ = Throw.IfNull(values);
 
@@ -36,7 +37,7 @@ public abstract class CachingEmbeddingGenerator<TInput, TEmbedding> : Delegating
             switch (valuesList.Count)
             {
                 case 0:
-                    return [];
+                    yield break;
 
                 case 1:
                     // In the expected common case where we can cheaply tell there's only a single value and access it,
@@ -44,26 +45,43 @@ public abstract class CachingEmbeddingGenerator<TInput, TEmbedding> : Delegating
                     var cacheKey = GetCacheKey(valuesList[0], options);
                     if (await ReadCacheAsync(cacheKey, cancellationToken).ConfigureAwait(false) is TEmbedding e)
                     {
-                        return [e];
+                        yield return e;
                     }
                     else
                     {
-                        var generated = await base.GenerateAsync(valuesList, options, cancellationToken).ConfigureAwait(false);
-                        if (generated.Count != 1)
+                        int found = 0;
+                        TEmbedding? single = null;
+                        await foreach (var embedding in base.GenerateAsync(valuesList, options, cancellationToken).ConfigureAwait(false))
                         {
-                            Throw.InvalidOperationException($"Expected exactly one embedding to be generated, but received {generated.Count}.");
+                            found++;
+                            if (found == 1)
+                            {
+                                single = embedding;
+                            }
+                            else
+                            {
+                                single = null;
+                                break;
+                            }
                         }
 
-                        await WriteCacheAsync(cacheKey, generated[0], cancellationToken).ConfigureAwait(false);
-                        return generated;
+                        if (single is null)
+                        {
+                            Throw.InvalidOperationException($"Expected exactly one embedding to be generated.");
+                        }
+
+                        await WriteCacheAsync(cacheKey, single, cancellationToken).ConfigureAwait(false);
+                        yield return single;
                     }
+
+                    yield break;
             }
         }
 
         // Some of the inputs may already be cached. Go through each, checking to see whether each individually is cached.
         // Split those that are cached into one list and those that aren't into another. We retain their original positions
         // so that we can reassemble the results in the correct order.
-        GeneratedEmbeddings<TEmbedding> results = [];
+        List<TEmbedding> results = [];
         List<(int Index, string CacheKey, TInput Input)>? uncached = null;
         foreach (TInput input in values)
         {
@@ -87,7 +105,11 @@ public abstract class CachingEmbeddingGenerator<TInput, TEmbedding> : Delegating
         if (uncached is not null)
         {
             // Now make a single call to the wrapped generator to generate embeddings for all of the uncached inputs.
-            var uncachedResults = await base.GenerateAsync(uncached.Select(e => e.Input), options, cancellationToken).ConfigureAwait(false);
+            List<TEmbedding> uncachedResults = [];
+            await foreach (var embedding in base.GenerateAsync(uncached.Select(e => e.Input), options, cancellationToken).ConfigureAwait(false))
+            {
+                uncachedResults.Add(embedding);
+            }
 
             // Store the resulting embeddings into the cache individually.
             for (int i = 0; i < uncachedResults.Count; i++)
@@ -103,7 +125,10 @@ public abstract class CachingEmbeddingGenerator<TInput, TEmbedding> : Delegating
         }
 
         Debug.Assert(results.All(e => e is not null), "Expected all values to be non-null");
-        return results;
+        foreach (var result in results)
+        {
+            yield return result;
+        }
     }
 
     /// <summary>Computes a cache key for the specified values.</summary>
