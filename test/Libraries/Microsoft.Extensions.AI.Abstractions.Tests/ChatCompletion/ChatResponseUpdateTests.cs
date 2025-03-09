@@ -116,7 +116,7 @@ public class ChatResponseUpdateTests
                 new TextContent("text-1"),
                 new DataContent("http://localhost/image"),
                 new FunctionCallContent("callId1", "fc1"),
-                new DataContent("data"u8.ToArray()),
+                new DataContent("data"u8.ToArray(), "text/plain"),
                 new TextContent("text-2"),
             ],
             RawRepresentation = new object(),

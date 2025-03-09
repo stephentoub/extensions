@@ -47,4 +47,19 @@ public class TextContentTests
         Assert.Equal(string.Empty, c.Text);
         Assert.Equal(string.Empty, c.ToString());
     }
+
+    [Fact]
+    public void MediaType_ValidValue_Roundtrips()
+    {
+        TextContent c = new("text");
+        Assert.Null(c.MediaType);
+
+        foreach (string? mediaType in new[] { null, "text/plain", "application/typescript", "text/html", null })
+        {
+            c.MediaType = mediaType;
+            Assert.Equal(mediaType, c.MediaType);
+        }
+
+        Assert.Equal("text", c.Text);
+    }
 }
