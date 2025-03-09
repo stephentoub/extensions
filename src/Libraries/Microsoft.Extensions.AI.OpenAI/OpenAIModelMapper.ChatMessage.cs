@@ -205,11 +205,11 @@ internal static partial class OpenAIModelMappers
                     break;
 
                 case ChatMessageContentPartKind.Image when openAiContentPart.ImageBytes is { } bytes:
-                    contents.Add(new DataContent(bytes.ToArray(), openAiContentPart.ImageBytesMediaType));
+                    contents.Add(new DataContent(bytes.ToMemory(), openAiContentPart.ImageBytesMediaType));
                     break;
 
-                case ChatMessageContentPartKind.Image:
-                    contents.Add(new DataContent(openAiContentPart.ImageUri?.ToString() ?? string.Empty));
+                case ChatMessageContentPartKind.Image when openAiContentPart.ImageUri is { } uri:
+                    contents.Add(new DataContent(uri, openAiContentPart.ImageBytesMediaType));
                     break;
             }
         }

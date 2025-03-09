@@ -97,9 +97,13 @@ public class DataContent : AIContent
     /// </summary>
     /// <param name="data">The byte contents.</param>
     /// <param name="mediaType">The media type (also known as MIME type) represented by the content.</param>
-    public DataContent(ReadOnlyMemory<byte> data, string? mediaType = null)
+    /// <exception cref="ArgumentNullException"><paramref name="mediaType"/> is null.</exception>
+    /// <exception cref="ArgumentException"><paramref name="mediaType"/> is empty or composed entirely of whitespace.</exception>
+    public DataContent(ReadOnlyMemory<byte> data, string mediaType)
     {
-        ValidateMediaType(ref mediaType);
+        _ = Throw.IfNullOrWhitespace(mediaType);
+
+        ValidateMediaType(ref mediaType!);
         MediaType = mediaType;
 
         _data = data;
