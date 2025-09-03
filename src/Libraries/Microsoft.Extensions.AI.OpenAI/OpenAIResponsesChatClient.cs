@@ -4,12 +4,12 @@
 using System;
 using System.ClientModel.Primitives;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Shared.Diagnostics;
@@ -27,9 +27,6 @@ namespace Microsoft.Extensions.AI;
 /// <summary>Represents an <see cref="IChatClient"/> for an <see cref="OpenAIResponseClient"/>.</summary>
 internal sealed class OpenAIResponsesChatClient : IChatClient
 {
-    /// <summary>Type info for serializing and deserializing arbitrary JSON objects.</summary>
-    private static readonly JsonTypeInfo _jsonTypeInfo = AIJsonUtilities.DefaultOptions.GetTypeInfo(typeof(object));
-
     /// <summary>Metadata about the client.</summary>
     private readonly ChatClientMetadata _metadata;
 
@@ -330,17 +327,11 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
                 default:
                 {
                     // Breaking-Glass capture of streaming reasoning contents
-                    if (streamingUpdate.GetType().Name == "InternalResponseReasoningSummaryTextDeltaEvent")
+                    if (streamingUpdate.GetType() == _internalResponseReasoningSummaryTextDeltaEventType &&
+                        _summaryTextDeltaProperty?.GetValue(streamingUpdate) is string delta)
                     {
-                        var responseDeltaElement = JsonSerializer.Deserialize(
-                            JsonSerializer.Serialize(streamingUpdate, _jsonTypeInfo),
-                            OpenAIJsonContext.Default.JsonElement);
-
-                        if (responseDeltaElement.TryGetProperty("delta", out var deltaProperty))
-                        {
-                            yield return CreateUpdate(new TextReasoningContent(deltaProperty.GetString()));
-                            break;
-                        }
+                        yield return CreateUpdate(new TextReasoningContent(delta));
+                        break;
                     }
 
                     yield return CreateUpdate();
@@ -350,6 +341,10 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
             }
         }
     }
+
+    [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicProperties)]
+    private static readonly Type? _internalResponseReasoningSummaryTextDeltaEventType = Type.GetType("OpenAI.Responses.InternalResponseReasoningSummaryTextDeltaEvent, OpenAI");
+    private static readonly PropertyInfo? _summaryTextDeltaProperty = _internalResponseReasoningSummaryTextDeltaEventType?.GetProperty("Delta");
 
     /// <inheritdoc />
     void IDisposable.Dispose()
