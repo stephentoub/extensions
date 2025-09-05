@@ -1,6 +1,7 @@
 ﻿// Licensed to the .NET Foundation under one or more agreements.
 // The .NET Foundation licenses this file to you under the MIT license.
 
+using System;
 using System.Diagnostics.CodeAnalysis;
 using Microsoft.Shared.Diagnostics;
 
@@ -15,8 +16,11 @@ public sealed class FunctionApprovalRequestContent : UserInputRequestContent
     /// <summary>
     /// Initializes a new instance of the <see cref="FunctionApprovalRequestContent"/> class.
     /// </summary>
-    /// <param name="id">The ID to uniquely identify the function approval request/response pair.</param>
+    /// <param name="id">The ID that uniquely identifies the function approval request/response pair.</param>
     /// <param name="functionCall">The function call that requires user approval.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="id"/> is <see langword="null"/>.</exception>
+    /// <exception cref="ArgumentException"><paramref name="id"/> is empty or composed entirely of whitespace.</exception>
+    /// <exception cref="ArgumentNullException"><paramref name="functionCall"/> is <see langword="null"/>.</exception>
     public FunctionApprovalRequestContent(string id, FunctionCallContent functionCall)
         : base(id)
     {
@@ -33,6 +37,5 @@ public sealed class FunctionApprovalRequestContent : UserInputRequestContent
     /// </summary>
     /// <param name="approved"><see langword="true"/> if the function call is approved; otherwise, <see langword="false"/>.</param>
     /// <returns>The <see cref="FunctionApprovalResponseContent"/> representing the approval response.</returns>
-    public FunctionApprovalResponseContent CreateResponse(bool approved)
-        => new(Id, approved, FunctionCall);
+    public FunctionApprovalResponseContent CreateResponse(bool approved) => new(Id, approved, FunctionCall);
 }

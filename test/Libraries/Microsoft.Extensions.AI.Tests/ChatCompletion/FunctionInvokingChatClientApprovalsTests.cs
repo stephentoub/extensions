@@ -23,7 +23,7 @@ public class FunctionInvokingChatClientApprovalsTests
             new ApprovalRequiredAIFunction(
                 AIFunctionFactory.Create(() => "Result 1", "Func1")),
             new ApprovalRequiredAIFunction(
-                AIFunctionFactory.Create((int i) => $"Result 2: {i}", "Func2")) { RequiresApprovalCallback = (context, _) => new ValueTask<bool>(context.FunctionCall.Name == "Func2") },
+                AIFunctionFactory.Create((int i) => $"Result 2: {i}", "Func2")),
         ];
 
         var options = new ChatOptions

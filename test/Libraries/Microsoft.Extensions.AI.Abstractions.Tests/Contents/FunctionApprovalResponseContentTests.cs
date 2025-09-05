@@ -8,33 +8,29 @@ namespace Microsoft.Extensions.AI.Contents;
 
 public class FunctionApprovalResponseContentTests
 {
+    [Fact]
+    public void Constructor_InvalidArguments_Throws()
+    {
+        FunctionCallContent functionCall = new("FCC1", "TestFunction");
+
+        Assert.Throws<ArgumentNullException>("id", () => new FunctionApprovalResponseContent(null!, true, functionCall));
+        Assert.Throws<ArgumentException>("id", () => new FunctionApprovalResponseContent("", true, functionCall));
+        Assert.Throws<ArgumentException>("id", () => new FunctionApprovalResponseContent("\r\t\n ", true, functionCall));
+
+        Assert.Throws<ArgumentNullException>("functionCall", () => new FunctionApprovalResponseContent("id", true, null!));
+    }
+
     [Theory]
     [InlineData("abc", true)]
     [InlineData("123", false)]
     [InlineData("!@#", true)]
-    public void Constructor_SetsProperties(string id, bool approved)
+    public void Constructor_Roundtrips(string id, bool approved)
     {
-        var functionCall = new FunctionCallContent("FCC1", "TestFunction");
-        var content = new FunctionApprovalResponseContent(id, approved, functionCall);
+        FunctionCallContent functionCall = new("FCC1", "TestFunction");
+        FunctionApprovalResponseContent content = new(id, approved, functionCall);
 
-        Assert.Equal(id, content.Id);
+        Assert.Same(id, content.Id);
         Assert.Equal(approved, content.Approved);
         Assert.Same(functionCall, content.FunctionCall);
-    }
-
-    [Fact]
-    public void Constructor_ThrowsOnNullFunctionCall()
-    {
-        Assert.ThrowsAny<ArgumentNullException>(() => new FunctionApprovalResponseContent("id", true, null!));
-    }
-
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void Constructor_ThrowsOnNullOrWhitespaceId(string? id)
-    {
-        var functionCall = new FunctionCallContent("FCC1", "TestFunction");
-        Assert.ThrowsAny<ArgumentException>(() => new FunctionApprovalResponseContent(id!, true, functionCall));
     }
 }

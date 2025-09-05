@@ -3,51 +3,27 @@
 
 using System;
 using System.Diagnostics.CodeAnalysis;
-using System.Threading;
-using System.Threading.Tasks;
-using Microsoft.Shared.Diagnostics;
 
 namespace Microsoft.Extensions.AI;
 
 /// <summary>
-/// Marks an existing <see cref="AIFunction"/> with additional metadata to indicate that it requires approval.
+/// Represents an <see cref="AIFunction"/> that can be described to an AI service and invoked, but for which
+/// the invoker should obtain user approval before the function is actually invoked.
 /// </summary>
+/// <remarks>
+/// This class simply augments an <see cref="AIFunction"/> with an indication that approval is required before invocation.
+/// It does not enforce the requirement for user approval; it is the responsibility of the invoker to obtain that approval before invoking the function.
+/// </remarks>
 [Experimental("MEAI001")]
 public sealed class ApprovalRequiredAIFunction : DelegatingAIFunction
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="ApprovalRequiredAIFunction"/> class.
     /// </summary>
-    /// <param name="function">The <see cref="AIFunction"/> that requires approval.</param>
-    public ApprovalRequiredAIFunction(AIFunction function)
-        : base(function)
+    /// <param name="innerFunction">The <see cref="AIFunction"/> represented by this instance.</param>
+    /// <exception cref="ArgumentNullException"><paramref name="innerFunction"/> is <see langword="null"/>.</exception>
+    public ApprovalRequiredAIFunction(AIFunction innerFunction)
+        : base(innerFunction)
     {
-        RequiresApprovalCallback = (_, _) => new(true);
-    }
-
-    /// <summary>
-    /// Gets or sets an optional callback that can be used to determine if the function call requires approval, instead of the default behavior, which is to always require approval.
-    /// </summary>
-    public Func<ApprovalContext, CancellationToken, ValueTask<bool>> RequiresApprovalCallback { get; set; }
-
-    /// <summary>
-    /// Context object that provides information about the function call that requires approval.
-    /// </summary>
-    public sealed class ApprovalContext
-    {
-        /// <summary>
-        /// Initializes a new instance of the <see cref="ApprovalContext"/> class.
-        /// </summary>
-        /// <param name="functionCall">The <see cref="FunctionCallContent"/> containing the details of the invocation.</param>
-        /// <exception cref="ArgumentNullException"><paramref name="functionCall"/> is null.</exception>
-        public ApprovalContext(FunctionCallContent functionCall)
-        {
-            FunctionCall = Throw.IfNull(functionCall);
-        }
-
-        /// <summary>
-        /// Gets the <see cref="FunctionCallContent"/> containing the details of the invocation that will be made if approval is granted.
-        /// </summary>
-        public FunctionCallContent FunctionCall { get; }
     }
 }

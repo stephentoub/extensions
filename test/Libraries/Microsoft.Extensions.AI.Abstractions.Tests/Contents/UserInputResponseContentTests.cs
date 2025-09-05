@@ -8,30 +8,30 @@ namespace Microsoft.Extensions.AI.Contents;
 
 public class UserInputResponseContentTests
 {
-    private class TestUserInputResponseContent : UserInputResponseContent
+    [Fact]
+    public void Constructor_InvalidArguments_Throws()
     {
-        public TestUserInputResponseContent(string id)
-            : base(id)
-        {
-        }
+        Assert.Throws<ArgumentNullException>("id", () => new TestUserInputResponseContent(null!));
+        Assert.Throws<ArgumentException>("id", () => new TestUserInputResponseContent(""));
+        Assert.Throws<ArgumentException>("id", () => new TestUserInputResponseContent("\r\t\n "));
     }
 
     [Theory]
     [InlineData("abc")]
     [InlineData("123")]
     [InlineData("!@#")]
-    public void Constructor_SetsId(string id)
+    public void Constructor_Roundtrips(string id)
     {
-        var content = new TestUserInputResponseContent(id);
+        TestUserInputResponseContent content = new(id);
+
         Assert.Equal(id, content.Id);
     }
 
-    [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    public void Constructor_ThrowsOnNullOrWhitespace(string? id)
+    private class TestUserInputResponseContent : UserInputResponseContent
     {
-        Assert.ThrowsAny<ArgumentException>(() => new TestUserInputResponseContent(id!));
+        public TestUserInputResponseContent(string id)
+            : base(id)
+        {
+        }
     }
 }

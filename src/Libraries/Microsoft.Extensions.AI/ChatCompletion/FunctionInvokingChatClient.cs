@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Shared.Diagnostics;
 
+#pragma warning disable CA1508 // Avoid dead conditional code
 #pragma warning disable CA2213 // Disposable fields should be disposed
 #pragma warning disable EA0002 // Use 'System.TimeProvider' to make the code easier to test
 #pragma warning disable SA1202 // 'protected' members should come before 'private' members
@@ -265,7 +266,6 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         List<ChatMessage> originalMessages = [.. messages];
         messages = originalMessages;
 
-        Dictionary<string, AITool>? toolMap = CreateToolsDictionary(AdditionalTools, options?.Tools); // all available tools, indexed by name
         List<ChatMessage>? augmentedHistory = null; // the actual history of messages sent on turns other than the first
         ChatResponse? response = null; // the response from the inner client, which is possibly modified and then eventually returned
         List<ChatMessage>? responseMessages = null; // tracked list of messages, across multiple turns, to be used for the final response
@@ -274,25 +274,31 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         bool lastIterationHadConversationId = false; // whether the last iteration's response had a ConversationId set
         int consecutiveErrorCount = 0;
 
-        // Process approval requests (remove from originalMessages) and rejected approval responses (re-create FCC and create failed FRC).
-        var (preDownstreamCallHistory, notInvokedApprovals) = ProcessFunctionApprovalResponses(
-            originalMessages, !string.IsNullOrWhiteSpace(options?.ConversationId), toolResponseId: null, functionCallContentFallbackMessageId: null);
+        Dictionary<string, AITool>? toolMap = CreateToolsDictionary(AdditionalTools, options?.Tools); // all available tools, indexed by name
 
-        // Invoke approved approval responses, which generates some additional FRC wrapped in ChatMessage.
+        // A previous turn may have translated FunctionCallContents from the inner client into approval requests sent back to the caller,
+        // for any AIFunctions that were actually ApprovalRequiredAIFunctions. If the incoming chat messages include responses to those
+        // approval requests, we need to process them now. This entails removing these manufactured approval requests from the chat message
+        // list and replacing them with the appropriate FunctionCallContents and FunctionResultContents that would have been generated if
+        // the inner client had returned them directly.
+        (responseMessages, var notInvokedApprovals) = ProcessFunctionApprovalResponses(
+            originalMessages, !string.IsNullOrWhiteSpace(options?.ConversationId), toolResponseId: null, functionCallContentFallbackMessageId: null);
         (IList<ChatMessage>? invokedApprovedFunctionApprovalResponses, bool shouldTerminate, consecutiveErrorCount) =
             await InvokeApprovedFunctionApprovalResponsesAsync(notInvokedApprovals, toolMap, originalMessages, options, consecutiveErrorCount, isStreaming: false, cancellationToken);
 
         if (invokedApprovedFunctionApprovalResponses is not null)
         {
-            // We need to add the generated FRC to the list we'll return to callers as part of the next response.
-            preDownstreamCallHistory ??= [];
-            preDownstreamCallHistory.AddRange(invokedApprovedFunctionApprovalResponses);
+            // Add any generated FRCs to the list we'll return to callers as part of the next response.
+            (responseMessages ??= []).AddRange(invokedApprovedFunctionApprovalResponses);
         }
 
         if (shouldTerminate)
         {
-            return new ChatResponse(preDownstreamCallHistory);
+            return new ChatResponse(responseMessages);
         }
+
+        // At this point, we've fully handled all approval responses that were part of the original messages,
+        // and we can now enter the main function calling loop.
 
         for (int iteration = 0; ; iteration++)
         {
@@ -305,9 +311,9 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                 Throw.InvalidOperationException($"The inner {nameof(IChatClient)} returned a null {nameof(ChatResponse)}.");
             }
 
-            // Before we do any function execution, make sure that any functions that require approval, have been turned into approval requests
-            // so that they don't get executed here.
-            response.Messages = await ReplaceFunctionCallsWithApprovalRequestsAsync(response.Messages, options?.Tools, AdditionalTools, cancellationToken);
+            // Before we do any function execution, make sure that any functions that require approval have been turned into
+            // approval requests so that they don't get executed here.
+            response.Messages = ReplaceFunctionCallsWithApprovalRequests(response.Messages, options?.Tools, AdditionalTools);
 
             // Any function call work to do? If yes, ensure we're tracking that work in functionCallContents.
             bool requiresFunctionInvocation =
@@ -316,13 +322,16 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
 
             if (!requiresFunctionInvocation && iteration == 0)
             {
-                // Insert any pre-invocation FCC and FRC that were converted from approval responses into the response here,
-                // so they are returned to the caller.
-                response.Messages = UpdateResponseMessagesWithPreDownstreamCallHistory(response.Messages, preDownstreamCallHistory);
-                preDownstreamCallHistory = null;
+                // In a common case where we make an initial request and there's no function calling work required,
+                // fast path out by just returning the original response. We may already have some messages
+                // in responseMessages from processing function approval responses, and we need to ensure
+                // those are included in the final response, too.
+                if (responseMessages is { Count: > 0 })
+                {
+                    responseMessages.AddRange(response.Messages);
+                    response.Messages = responseMessages;
+                }
 
-                // In a common case where we make a request and there's no function calling work required,
-                // fast path out by just returning the original response.
                 return response;
             }
 
@@ -391,6 +400,7 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         messages = originalMessages;
 
         Dictionary<string, AITool>? toolMap = CreateToolsDictionary(AdditionalTools, options?.Tools); // all available tools, indexed by name
+        ApprovalRequiredAIFunction[]? approvalRequiredFunctions = null; // available tools that require approval
         List<ChatMessage>? augmentedHistory = null; // the actual history of messages sent on turns other than the first
         List<FunctionCallContent>? functionCallContents = null; // function call contents that need responding to in the current turn
         List<ChatMessage>? responseMessages = null; // tracked list of messages, across multiple turns, to be used in fallback cases to reconstitute history
@@ -409,7 +419,11 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         // where we don't know what the original message id of the function call was.
         string functionCallContentFallbackMessageId = Guid.NewGuid().ToString("N");
 
-        // Process approval requests (remove from original messages) and rejected approval responses (re-create FCC and create failed FRC).
+        // A previous turn may have translated FunctionCallContents from the inner client into approval requests sent back to the caller,
+        // for any AIFunctions that were actually ApprovalRequiredAIFunctions. If the incoming chat messages include responses to those
+        // approval requests, we need to process them now. This entails removing these manufactured approval requests from the chat message
+        // list and replacing them with the appropriate FunctionCallContents and FunctionResultContents that would have been generated if
+        // the inner client had returned them directly.
         var (preDownstreamCallHistory, notInvokedApprovals) = ProcessFunctionApprovalResponses(
             originalMessages, !string.IsNullOrWhiteSpace(options?.ConversationId), toolResponseId, functionCallContentFallbackMessageId);
         if (preDownstreamCallHistory is not null)
@@ -440,8 +454,8 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
             }
         }
 
-        ApprovalRequiredAIFunction[]? approvalRequiredFunctions = (options?.Tools ?? []).Concat(AdditionalTools ?? []).OfType<ApprovalRequiredAIFunction>().ToArray();
-        bool hasApprovalRequiringFunctions = approvalRequiredFunctions.Length > 0;
+        // At this point, we've fully handled all approval responses that were part of the original messages,
+        // and we can now enter the main function calling loop.
 
         for (int iteration = 0; ; iteration++)
         {
@@ -476,50 +490,67 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                     }
                 }
 
-                if (functionCallContents?.Count is not > 0 || !hasApprovalRequiringFunctions)
+                // We're streaming updates back to the caller. However, approvals requires extra handling. We should not yield any
+                // FunctionCallContents back to the caller if approvals might be required, because if any actually are, we need to convert
+                // all FunctionCallContents into approval requests, even those that don't require approval (we otherwise don't have a way
+                // to track the FCCs to a later turn, in particular when the conversation history is managed by the service / inner client).
+                // So, if there are no functions that need approval, we can yield updates with FCCs as they arrive. But if any FCC _might_
+                // require approval (which just means that any AIFunction we can possibly invoke requires approval), then we need to hold off
+                // on yielding any FCCs until we know whether any of them actually require approval, which is either at the end of the stream
+                // or the first time we get an FCC that requires approval. At that point, we can yield all of the updates buffered thus far
+                // and anything further, replacing FCCs with approval if any required it, or yielding them as is.
+                if (approvalRequiredFunctions is null && functionCallContents is { Count: > 0 })
+                {
+                    approvalRequiredFunctions =
+                        (options?.Tools ?? Enumerable.Empty<AITool>())
+                        .Concat(AdditionalTools ?? Enumerable.Empty<AITool>())
+                        .OfType<ApprovalRequiredAIFunction>()
+                        .ToArray();
+                }
+
+                if (approvalRequiredFunctions is not { Length: > 0 })
                 {
                     // If there are no function calls to make yet, or if none of the functions require approval at all,
                     // we can yield the update as-is.
                     lastYieldedUpdateIndex++;
                     yield return update;
                     Activity.Current = activity; // workaround for https://github.com/dotnet/runtime/issues/47802
+
+                    continue;
                 }
-                else
+
+                // There are function calls to make, some of which _may_ require approval.
+                Debug.Assert(functionCallContents is { Count: > 0 }, "Expected to have function call contents to check for approval requiring functions.");
+                Debug.Assert(approvalRequiredFunctions is { Length: > 0 }, "Expected to have approval requiring functions to check against function call contents.");
+
+                // Check if any of the function call contents in this update requires approval.
+                (hasApprovalRequiringFcc, lastApprovalCheckedFCCIndex) = CheckForApprovalRequiringFCC(
+                    functionCallContents, approvalRequiredFunctions!, hasApprovalRequiringFcc, lastApprovalCheckedFCCIndex);
+                if (hasApprovalRequiringFcc)
                 {
-                    // Check if any of the function call contents in this update requires approval.
-                    // Once we find the first one that requires approval, this method becomes a no-op.
-                    (hasApprovalRequiringFcc, lastApprovalCheckedFCCIndex) = await CheckForApprovalRequiringFCCAsync(
-                        functionCallContents, approvalRequiredFunctions, hasApprovalRequiringFcc, lastApprovalCheckedFCCIndex, cancellationToken);
-
-                    // We've encountered a function call content that requires approval (either in this update or earlier)
-                    // so we need to ask for approval for all functions, since we cannot mix and match.
-                    if (hasApprovalRequiringFcc)
+                    // If we've encountered a function call content that requires approval,
+                    // we need to ask for approval for all functions, since we cannot mix and match.
+                    // Convert all function call contents into approval requests from the last yielded update index
+                    // and yield all those updates.
+                    for (; lastYieldedUpdateIndex < updates.Count; lastYieldedUpdateIndex++)
                     {
-                        // Convert all function call contents into approval requests from the last yielded update index
-                        // and yield all those updates.
-                        for (; lastYieldedUpdateIndex < updates.Count; lastYieldedUpdateIndex++)
+                        var updateToYield = updates[lastYieldedUpdateIndex];
+                        if (TryReplaceFunctionCallsWithApprovalRequests(updateToYield.Contents, out var updatedContents))
                         {
-                            var updateToYield = updates[lastYieldedUpdateIndex];
-                            if (TryReplaceFunctionCallsWithApprovalRequests(updateToYield.Contents, out var updatedContents))
-                            {
-                                updateToYield.Contents = updatedContents;
-                            }
-
-                            yield return updateToYield;
-                            Activity.Current = activity; // workaround for https://github.com/dotnet/runtime/issues/47802
+                            updateToYield.Contents = updatedContents;
                         }
+
+                        yield return updateToYield;
+                        Activity.Current = activity; // workaround for https://github.com/dotnet/runtime/issues/47802
                     }
-                    else
-                    {
-                        // We don't have any appoval requiring function calls yet, but we may receive some in future
-                        // so we cannot yield the updates yet. We'll just keep them in the updates list
-                        // for later.
-                        // We will yield the updates as soon as we receive a function call content that requires approval or
-                        // when we reach the end of the updates stream.
-                    }
+
+                    continue;
                 }
 
-                Activity.Current = activity; // workaround for https://github.com/dotnet/runtime/issues/47802
+                // We don't have any approval requiring function calls yet, but we may receive some in future
+                // so we cannot yield the updates yet. We'll just keep them in the updates list for later.
+                // We will yield the updates as soon as we receive a function call content that requires approval
+                // or when we reach the end of the updates stream.
             }
 
             // If there's nothing more to do, break out of the loop and allow the handling at the
@@ -560,6 +591,20 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         }
 
         AddUsageTags(activity, totalUsage);
+
+        static ChatResponseUpdate ConvertToolResultMessageToUpdate(ChatMessage message, string? conversationId, string? messageId) =>
+            new()
+            {
+                AdditionalProperties = message.AdditionalProperties,
+                AuthorName = message.AuthorName,
+                ConversationId = conversationId,
+                CreatedAt = DateTimeOffset.UtcNow,
+                Contents = message.Contents,
+                RawRepresentation = message.RawRepresentation,
+                ResponseId = messageId,
+                MessageId = messageId,
+                Role = message.Role,
+            };
     }
 
     /// <summary>Adds tags to <paramref name="activity"/> for usage details in <paramref name="usage"/>.</summary>
@@ -1404,12 +1449,11 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
     /// Supports checking from a provided index up to the end of the list, to allow efficient incremental checking
     /// when streaming.
     /// </summary>
-    private static async Task<(bool hasApprovalRequiringFcc, int lastApprovalCheckedFCCIndex)> CheckForApprovalRequiringFCCAsync(
+    private static (bool hasApprovalRequiringFcc, int lastApprovalCheckedFCCIndex) CheckForApprovalRequiringFCC(
         List<FunctionCallContent>? functionCallContents,
         ApprovalRequiredAIFunction[] approvalRequiredFunctions,
         bool hasApprovalRequiringFcc,
-        int lastApprovalCheckedFCCIndex,
-        CancellationToken cancellationToken)
+        int lastApprovalCheckedFCCIndex)
     {
         // If we already found an approval requiring FCC, we can skip checking the rest.
         if (hasApprovalRequiringFcc)
@@ -1421,8 +1465,7 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         for (; lastApprovalCheckedFCCIndex < (functionCallContents?.Count ?? 0); lastApprovalCheckedFCCIndex++)
         {
             var fcc = functionCallContents![lastApprovalCheckedFCCIndex];
-            if (approvalRequiredFunctions.FirstOrDefault(y => y.Name == fcc.Name) is ApprovalRequiredAIFunction approvalFunction &&
-                await approvalFunction.RequiresApprovalCallback(new(fcc), cancellationToken))
+            if (approvalRequiredFunctions.FirstOrDefault(y => y.Name == fcc.Name) is ApprovalRequiredAIFunction approvalFunction)
             {
                 hasApprovalRequiringFcc = true;
             }
@@ -1446,8 +1489,7 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                 if (content[i] is FunctionCallContent fcc)
                 {
                     updatedContent ??= [.. content]; // Clone the list if we haven't already
-                    var approvalRequest = new FunctionApprovalRequestContent(fcc.CallId, fcc);
-                    updatedContent[i] = approvalRequest;
+                    updatedContent[i] = new FunctionApprovalRequestContent(fcc.CallId, fcc);
                 }
             }
         }
@@ -1459,11 +1501,10 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
     /// Replaces all <see cref="FunctionCallContent"/> from <paramref name="messages"/> with <see cref="FunctionApprovalRequestContent"/>
     /// if any one of them requires approval.
     /// </summary>
-    private static async Task<IList<ChatMessage>> ReplaceFunctionCallsWithApprovalRequestsAsync(
+    private static IList<ChatMessage> ReplaceFunctionCallsWithApprovalRequests(
         IList<ChatMessage> messages,
         IList<AITool>? requestOptionsTools,
-        IList<AITool>? additionalTools,
-        CancellationToken cancellationToken)
+        IList<AITool>? additionalTools)
     {
         var outputMessages = messages;
         ApprovalRequiredAIFunction[]? approvalRequiredFunctions = null;
@@ -1487,8 +1528,7 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
                         .OfType<ApprovalRequiredAIFunction>()
                         .ToArray();
 
-                    anyApprovalRequired |= approvalRequiredFunctions.FirstOrDefault(x => x.Name == functionCall.Name) is { } approvalFunction &&
-                        await approvalFunction.RequiresApprovalCallback(new(functionCall), cancellationToken);
+                    anyApprovalRequired |= approvalRequiredFunctions.FirstOrDefault(x => x.Name == functionCall.Name) is { } approvalFunction;
                 }
             }
         }
@@ -1516,36 +1556,6 @@ public partial class FunctionInvokingChatClient : DelegatingChatClient
         }
 
         return outputMessages;
-    }
-
-    /// <summary>
-    /// Insert the given <paramref name="preDownstreamCallHistory"/> at the start of the <paramref name="responseMessages"/>.
-    /// </summary>
-    private static IList<ChatMessage> UpdateResponseMessagesWithPreDownstreamCallHistory(IList<ChatMessage> responseMessages, List<ChatMessage>? preDownstreamCallHistory)
-    {
-        if (preDownstreamCallHistory?.Count > 0)
-        {
-            // Since these messages are pre-invocation, we want to insert them at the start of the response messages.
-            return [.. preDownstreamCallHistory, .. responseMessages];
-        }
-
-        return responseMessages;
-    }
-
-    private static ChatResponseUpdate ConvertToolResultMessageToUpdate(ChatMessage message, string? conversationId, string? messageId)
-    {
-        return new()
-        {
-            AdditionalProperties = message.AdditionalProperties,
-            AuthorName = message.AuthorName,
-            ConversationId = conversationId,
-            CreatedAt = DateTimeOffset.UtcNow,
-            Contents = message.Contents,
-            RawRepresentation = message.RawRepresentation,
-            ResponseId = messageId,
-            MessageId = messageId,
-            Role = message.Role,
-        };
     }
 
     private static TimeSpan GetElapsedTime(long startingTimestamp) =>
