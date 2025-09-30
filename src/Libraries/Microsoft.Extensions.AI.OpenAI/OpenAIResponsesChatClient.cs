@@ -425,90 +425,9 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
         {
             foreach (AITool tool in tools)
             {
-                switch (tool)
+                if (CreateResponseTool(tool, options) is { } responseTool)
                 {
-                    case ResponseToolAITool rtat:
-                        result.Tools.Add(rtat.Tool);
-                        break;
-
-                    case AIFunctionDeclaration aiFunction:
-                        result.Tools.Add(ToResponseTool(aiFunction, options));
-                        break;
-
-                    case HostedWebSearchTool webSearchTool:
-                        WebSearchToolLocation? location = null;
-                        if (webSearchTool.AdditionalProperties.TryGetValue(nameof(WebSearchToolLocation), out object? objLocation))
-                        {
-                            location = objLocation as WebSearchToolLocation;
-                        }
-
-                        WebSearchToolContextSize? size = null;
-                        if (webSearchTool.AdditionalProperties.TryGetValue(nameof(WebSearchToolContextSize), out object? objSize) &&
-                            objSize is WebSearchToolContextSize)
-                        {
-                            size = (WebSearchToolContextSize)objSize;
-                        }
-
-                        result.Tools.Add(ResponseTool.CreateWebSearchTool(location, size));
-                        break;
-
-                    case HostedFileSearchTool fileSearchTool:
-                        result.Tools.Add(ResponseTool.CreateFileSearchTool(
-                            fileSearchTool.Inputs?.OfType<HostedVectorStoreContent>().Select(c => c.VectorStoreId) ?? [],
-                            fileSearchTool.MaximumResultCount));
-                        break;
-
-                    case HostedCodeInterpreterTool codeTool:
-                        result.Tools.Add(
-                            ResponseTool.CreateCodeInterpreterTool(
-                                new CodeInterpreterToolContainer(codeTool.Inputs?.OfType<HostedFileContent>().Select(f => f.FileId).ToList() is { Count: > 0 } ids ?
-                                    CodeInterpreterToolContainerConfiguration.CreateAutomaticContainerConfiguration(ids) :
-                                    new())));
-                        break;
-
-                    case HostedMcpServerTool mcpTool:
-                        McpTool responsesMcpTool = ResponseTool.CreateMcpTool(
-                            mcpTool.ServerName,
-                            mcpTool.Url,
-                            serverDescription: mcpTool.ServerDescription,
-                            headers: mcpTool.Headers);
-
-                        if (mcpTool.AllowedTools is not null)
-                        {
-                            responsesMcpTool.AllowedTools = new();
-                            AddAllMcpFilters(mcpTool.AllowedTools, responsesMcpTool.AllowedTools);
-                        }
-
-                        switch (mcpTool.ApprovalMode)
-                        {
-                            case HostedMcpServerToolAlwaysRequireApprovalMode:
-                                responsesMcpTool.ToolCallApprovalPolicy = new McpToolCallApprovalPolicy(GlobalMcpToolCallApprovalPolicy.AlwaysRequireApproval);
-                                break;
-
-                            case HostedMcpServerToolNeverRequireApprovalMode:
-                                responsesMcpTool.ToolCallApprovalPolicy = new McpToolCallApprovalPolicy(GlobalMcpToolCallApprovalPolicy.NeverRequireApproval);
-                                break;
-
-                            case HostedMcpServerToolRequireSpecificApprovalMode specificMode:
-                                responsesMcpTool.ToolCallApprovalPolicy = new McpToolCallApprovalPolicy(new CustomMcpToolCallApprovalPolicy());
-
-                                if (specificMode.AlwaysRequireApprovalToolNames is { Count: > 0 } alwaysRequireToolNames)
-                                {
-                                    responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsAlwaysRequiringApproval = new();
-                                    AddAllMcpFilters(alwaysRequireToolNames, responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsAlwaysRequiringApproval);
-                                }
-
-                                if (specificMode.NeverRequireApprovalToolNames is { Count: > 0 } neverRequireToolNames)
-                                {
-                                    responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsNeverRequiringApproval = new();
-                                    AddAllMcpFilters(neverRequireToolNames, responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsNeverRequiringApproval);
-                                }
-
-                                break;
-                        }
-
-                        result.Tools.Add(responsesMcpTool);
-                        break;
+                    result.Tools.Add(responseTool);
                 }
             }
 
@@ -531,9 +450,15 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
                         break;
 
                     case RequiredChatToolMode required:
-                        result.ToolChoice = required.RequiredFunctionName is not null ?
-                            ResponseToolChoice.CreateFunctionChoice(required.RequiredFunctionName) :
-                            ResponseToolChoice.CreateRequiredChoice();
+                        if (required.RequiredFunctionName is { } requiredFunctionName)
+                        {
+                            result.ToolChoice = ResponseToolChoice.CreateFunctionChoice(requiredFunctionName);
+                        }
+                        else
+                        {
+                            result.ToolChoice ??= ResponseToolChoice.CreateRequiredChoice();
+                        }
+
                         break;
                 }
             }
@@ -546,6 +471,90 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
         }
 
         return result;
+    }
+
+    private static ResponseTool? CreateResponseTool(AITool tool, ChatOptions? options)
+    {
+        switch (tool)
+        {
+            case ResponseToolAITool rtat:
+                return rtat.Tool;
+
+            case AIFunctionDeclaration aiFunction:
+                return ToResponseTool(aiFunction, options);
+
+            case HostedWebSearchTool webSearchTool:
+                WebSearchToolLocation? location = null;
+                if (webSearchTool.AdditionalProperties.TryGetValue(nameof(WebSearchToolLocation), out object? objLocation))
+                {
+                    location = objLocation as WebSearchToolLocation;
+                }
+
+                WebSearchToolContextSize? size = null;
+                if (webSearchTool.AdditionalProperties.TryGetValue(nameof(WebSearchToolContextSize), out object? objSize) &&
+                    objSize is WebSearchToolContextSize)
+                {
+                    size = (WebSearchToolContextSize)objSize;
+                }
+
+                return ResponseTool.CreateWebSearchTool(location, size);
+
+            case HostedFileSearchTool fileSearchTool:
+                return ResponseTool.CreateFileSearchTool(
+                    fileSearchTool.Inputs?.OfType<HostedVectorStoreContent>().Select(c => c.VectorStoreId) ?? [],
+                    fileSearchTool.MaximumResultCount);
+
+            case HostedCodeInterpreterTool codeTool:
+                return ResponseTool.CreateCodeInterpreterTool(
+                        new CodeInterpreterToolContainer(codeTool.Inputs?.OfType<HostedFileContent>().Select(f => f.FileId).ToList() is { Count: > 0 } ids ?
+                            CodeInterpreterToolContainerConfiguration.CreateAutomaticContainerConfiguration(ids) :
+                            new()));
+
+            case HostedMcpServerTool mcpTool:
+                McpTool responsesMcpTool = ResponseTool.CreateMcpTool(
+                    mcpTool.ServerName,
+                    mcpTool.Url,
+                    serverDescription: mcpTool.ServerDescription,
+                    headers: mcpTool.Headers);
+
+                if (mcpTool.AllowedTools is not null)
+                {
+                    responsesMcpTool.AllowedTools = new();
+                    AddAllMcpFilters(mcpTool.AllowedTools, responsesMcpTool.AllowedTools);
+                }
+
+                switch (mcpTool.ApprovalMode)
+                {
+                    case HostedMcpServerToolAlwaysRequireApprovalMode:
+                        responsesMcpTool.ToolCallApprovalPolicy = new McpToolCallApprovalPolicy(GlobalMcpToolCallApprovalPolicy.AlwaysRequireApproval);
+                        break;
+
+                    case HostedMcpServerToolNeverRequireApprovalMode:
+                        responsesMcpTool.ToolCallApprovalPolicy = new McpToolCallApprovalPolicy(GlobalMcpToolCallApprovalPolicy.NeverRequireApproval);
+                        break;
+
+                    case HostedMcpServerToolRequireSpecificApprovalMode specificMode:
+                        responsesMcpTool.ToolCallApprovalPolicy = new McpToolCallApprovalPolicy(new CustomMcpToolCallApprovalPolicy());
+
+                        if (specificMode.AlwaysRequireApprovalToolNames is { Count: > 0 } alwaysRequireToolNames)
+                        {
+                            responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsAlwaysRequiringApproval = new();
+                            AddAllMcpFilters(alwaysRequireToolNames, responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsAlwaysRequiringApproval);
+                        }
+
+                        if (specificMode.NeverRequireApprovalToolNames is { Count: > 0 } neverRequireToolNames)
+                        {
+                            responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsNeverRequiringApproval = new();
+                            AddAllMcpFilters(neverRequireToolNames, responsesMcpTool.ToolCallApprovalPolicy.CustomPolicy.ToolsNeverRequiringApproval);
+                        }
+
+                        break;
+                }
+
+                return responsesMcpTool;
+        }
+
+        return null;
     }
 
     internal static ResponseTextFormat? ToOpenAIResponseTextFormat(ChatResponseFormat? format, ChatOptions? options = null) =>

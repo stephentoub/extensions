@@ -1384,6 +1384,10 @@
         {
           "Member": "static Microsoft.Extensions.AI.RequiredChatToolMode Microsoft.Extensions.AI.ChatToolMode.RequireSpecific(string functionName);",
           "Stage": "Stable"
+        },
+        {
+          "Member": "static Microsoft.Extensions.AI.RequiredChatToolMode Microsoft.Extensions.AI.ChatToolMode.RequireSpecific(Microsoft.Extensions.AI.AITool tool);",
+          "Stage": "Stable"
         }
       ],
       "Properties": [
@@ -2089,6 +2093,10 @@
       "Methods": [
         {
           "Member": "Microsoft.Extensions.AI.RequiredChatToolMode.RequiredChatToolMode(string? requiredFunctionName);",
+          "Stage": "Stable"
+        },
+        {
+          "Member": "Microsoft.Extensions.AI.RequiredChatToolMode.RequiredChatToolMode(Microsoft.Extensions.AI.AITool? requiredTool);",
           "Stage": "Stable"
         },
         {
