@@ -55,6 +55,7 @@ public class ChatResponseUpdateExtensionsTests
         Assert.Equal(ChatRole.Assistant, message.Role);
         Assert.Equal("Someone", message.AuthorName);
         Assert.Null(message.AdditionalProperties);
+        Assert.Equal(updates, Assert.IsType<List<ChatResponseUpdate>>(message.RawRepresentation));
 
         Assert.NotNull(response.AdditionalProperties);
         Assert.Equal(2, response.AdditionalProperties.Count);

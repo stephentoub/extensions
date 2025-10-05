@@ -378,6 +378,14 @@ public static class ChatResponseExtensions
             }
         }
 
+        // Include the raw updates that compose the message in the message's RawRepresentation.
+        if (message.RawRepresentation is not List<ChatResponseUpdate> messageUpdatesList)
+        {
+            message.RawRepresentation = messageUpdatesList = [];
+        }
+
+        messageUpdatesList.Add(update);
+
         // Other members on a ChatResponseUpdate map to members of the ChatResponse.
         // Update the response object with those, preferring the values from later updates.
 
