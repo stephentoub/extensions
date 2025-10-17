@@ -8,8 +8,12 @@ namespace Microsoft.Extensions.AI;
 
 /// <summary>Represents content used by AI services.</summary>
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "$type")]
+[JsonDerivedType(typeof(CodeInterpreterToolCallContent), typeDiscriminator: "codeInterpreterToolCall")]
+[JsonDerivedType(typeof(CodeInterpreterToolResultContent), typeDiscriminator: "codeInterpreterToolResult")]
 [JsonDerivedType(typeof(DataContent), typeDiscriminator: "data")]
 [JsonDerivedType(typeof(ErrorContent), typeDiscriminator: "error")]
+[JsonDerivedType(typeof(FileSearchToolCallContent), typeDiscriminator: "fileSearchToolCall")]
+[JsonDerivedType(typeof(FileSearchToolResultContent), typeDiscriminator: "fileSearchToolResult")]
 [JsonDerivedType(typeof(FunctionCallContent), typeDiscriminator: "functionCall")]
 [JsonDerivedType(typeof(FunctionResultContent), typeDiscriminator: "functionResult")]
 [JsonDerivedType(typeof(HostedFileContent), typeDiscriminator: "hostedFile")]
@@ -18,6 +22,8 @@ namespace Microsoft.Extensions.AI;
 [JsonDerivedType(typeof(TextReasoningContent), typeDiscriminator: "reasoning")]
 [JsonDerivedType(typeof(UriContent), typeDiscriminator: "uri")]
 [JsonDerivedType(typeof(UsageContent), typeDiscriminator: "usage")]
+[JsonDerivedType(typeof(WebSearchToolCallContent), typeDiscriminator: "webSearchToolCall")]
+[JsonDerivedType(typeof(WebSearchToolResultContent), typeDiscriminator: "webSearchToolResult")]
 
 // These should be added in once they're no longer [Experimental]. If they're included while still
 // experimental, any JsonSerializerContext that includes AIContent will incur errors about using
