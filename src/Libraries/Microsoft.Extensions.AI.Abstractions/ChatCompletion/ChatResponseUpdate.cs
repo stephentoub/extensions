@@ -28,6 +28,65 @@ namespace Microsoft.Extensions.AI;
 /// updates provide different values for properties like <see cref="ModelId"/>,
 /// only one of the values will be used to populate <see cref="ChatResponse.ModelId"/>.
 /// </para>
+/// <para>
+/// <strong>Understanding the Identifier Hierarchy:</strong>
+/// </para>
+/// <para>
+/// <see cref="ChatResponseUpdate"/> includes several identifier properties that form a hierarchy for organizing
+/// streaming content. Understanding their relationships is crucial for correctly reconstructing responses:
+/// </para>
+/// <list type="bullet">
+/// <item>
+/// <description>
+/// <see cref="ConversationId"/>: Identifies a multi-turn conversation. Multiple requests and responses
+/// can share the same conversation ID when the provider supports stateful conversations. This is the
+/// broadest scope identifier.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <see cref="ResponseId"/>: Identifies a single response to a chat completion request. All updates
+/// from the same call to <see cref="IChatClient.GetStreamingResponseAsync"/> should share the same
+/// response ID. A conversation may contain multiple responses.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <see cref="MessageId"/>: Identifies a single message within a response. Most responses contain
+/// one message, but some providers or scenarios may return multiple messages in a single response.
+/// When <see cref="ChatResponseExtensions.ToChatResponseAsync"/> reconstructs messages, it uses this
+/// ID to determine message boundaries. If not provided or if all updates have the same message ID,
+/// all content is grouped into a single message.
+/// </description>
+/// </item>
+/// <item>
+/// <description>
+/// <see cref="PartId"/>: Identifies a specific content part (block) within a message. Providers
+/// may send multiple content blocks within a single message (e.g., text followed by a tool call,
+/// followed by more text). This identifier allows proper ordering and grouping of content within a message.
+/// For example, part "0" might be text, part "1" a tool call, and part "2" more text.
+/// </description>
+/// </item>
+/// </list>
+/// <para>
+/// <strong>Example Hierarchy:</strong>
+/// </para>
+/// <code>
+/// ConversationId: "conv_123"
+///   └─ ResponseId: "resp_456" (First user query)
+///       └─ MessageId: "msg_789" (Assistant's response)
+///           ├─ PartId: "0" (Text: "Let me help...")
+///           ├─ PartId: "1" (Tool call to search)
+///           └─ PartId: "2" (Text: "Based on results...")
+///   └─ ResponseId: "resp_457" (Follow-up query)
+///       └─ MessageId: "msg_790" (Assistant's response)
+///           └─ PartId: "0" (Text: "Here's more info...")
+/// </code>
+/// <para>
+/// Note that many providers simplify this structure: they might use the same value for <see cref="ResponseId"/>
+/// and <see cref="MessageId"/> when there's only one message per response, or omit <see cref="PartId"/>
+/// when content doesn't need explicit part tracking.
+/// </para>
 /// </remarks>
 [DebuggerDisplay("[{Role}] {ContentForDebuggerDisplay}{EllipsesForDebuggerDisplay,nq}")]
 public class ChatResponseUpdate
@@ -112,6 +171,38 @@ public class ChatResponseUpdate
     /// all updates that are part of the same logical message within a streaming response.
     /// </remarks>
     public string? MessageId { get; set; }
+
+    /// <summary>Gets or sets the identifier of the content part within a message.</summary>
+    /// <remarks>
+    /// <para>
+    /// Some providers send multiple content blocks (parts) within a single message, such as when a response
+    /// contains both text and tool calls, or when handling multi-modal content. This property enables tracking
+    /// which content part (or block) a given update belongs to, allowing proper reconstruction of the message structure.
+    /// </para>
+    /// <para>
+    /// For example, a streaming response might contain:
+    /// <list type="bullet">
+    /// <item><description>Part "0": Text content ("Let me help you with that...")</description></item>
+    /// <item><description>Part "1": Tool call (function invocation)</description></item>
+    /// <item><description>Part "2": Additional text content ("Based on the results...")</description></item>
+    /// </list>
+    /// </para>
+    /// <para>
+    /// When set, this value should be consistent across all updates belonging to the same content part.
+    /// If not set or <see langword="null"/>, the property is ignored during message reconstruction.
+    /// </para>
+    /// <para>
+    /// This property is particularly relevant for providers like:
+    /// <list type="bullet">
+    /// <item><description>OpenAI Responses API: Maps to <c>OutputIndex</c> or <c>ContentIndex</c></description></item>
+    /// <item><description>Anthropic/Claude: Maps to the <c>index</c> field in content blocks</description></item>
+    /// <item><description>Google Gemini: Maps to the array index in <c>parts[]</c></description></item>
+    /// <item><description>AWS Bedrock: Maps to <c>contentBlockIndex</c></description></item>
+    /// </list>
+    /// </para>
+    /// </remarks>
+    [Experimental("MEAI001")]
+    public string? PartId { get; set; }
 
     /// <summary>Gets or sets an identifier for the state of the conversation of which this update is a part.</summary>
     /// <remarks>

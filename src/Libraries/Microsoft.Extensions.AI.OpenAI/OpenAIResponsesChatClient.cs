@@ -6,6 +6,7 @@ using System.ClientModel;
 using System.ClientModel.Primitives;
 using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
@@ -264,13 +265,25 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
         await foreach (var streamingUpdate in streamingResponseUpdates.WithCancellation(cancellationToken).ConfigureAwait(false))
         {
             // Create an update populated with the current state of the response.
-            ChatResponseUpdate CreateUpdate(AIContent? content = null) =>
-                new(lastRole, content is not null ? [content] : null)
+            ChatResponseUpdate CreateUpdate(AIContent? content = null, int? outputIndex = null, int? contentIndex = null)
+            {
+                string? partId = null;
+                if (outputIndex.HasValue)
+                {
+#pragma warning disable LA0002 // Use 'Microsoft.Shared.Text.NumericExtensions.ToInvariantString' for improved performance
+                    partId = contentIndex.HasValue ?
+                        FormattableString.Invariant($"{outputIndex}.{contentIndex}") :
+                        outputIndex.Value.ToString(CultureInfo.InvariantCulture);
+#pragma warning restore LA0002
+                }
+
+                return new(lastRole, content is not null ? [content] : null)
                 {
                     ConversationId = conversationId,
                     CreatedAt = createdAt,
                     MessageId = lastMessageId,
                     ModelId = modelId,
+                    PartId = partId,
                     RawRepresentation = streamingUpdate,
                     ResponseId = responseId,
                     ContinuationToken = CreateContinuationToken(
@@ -279,6 +292,7 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
                         options?.BackgroundModeEnabled,
                         streamingUpdate.SequenceNumber)
                 };
+            }
 
             switch (streamingUpdate)
             {
@@ -355,21 +369,26 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
                     goto default;
 
                 case StreamingResponseOutputTextDeltaUpdate outputTextDeltaUpdate:
-                    yield return CreateUpdate(new TextContent(outputTextDeltaUpdate.Delta));
+                    yield return CreateUpdate(
+                        new TextContent(outputTextDeltaUpdate.Delta),
+                        outputTextDeltaUpdate.OutputIndex,
+                        outputTextDeltaUpdate.ContentIndex);
                     break;
 
                 case StreamingResponseOutputItemDoneUpdate outputItemDoneUpdate when outputItemDoneUpdate.Item is FunctionCallResponseItem fcri:
-                    yield return CreateUpdate(OpenAIClientExtensions.ParseCallContent(fcri.FunctionArguments.ToString(), fcri.CallId, fcri.FunctionName));
+                    yield return CreateUpdate(
+                        OpenAIClientExtensions.ParseCallContent(fcri.FunctionArguments.ToString(), fcri.CallId, fcri.FunctionName),
+                        outputItemDoneUpdate.OutputIndex);
                     break;
 
                 case StreamingResponseOutputItemDoneUpdate outputItemDoneUpdate when outputItemDoneUpdate.Item is McpToolCallItem mtci:
-                    var mcpUpdate = CreateUpdate();
+                    var mcpUpdate = CreateUpdate(outputIndex: outputItemDoneUpdate.OutputIndex);
                     AddMcpToolCallContent(mtci, mcpUpdate.Contents);
                     yield return mcpUpdate;
                     break;
 
                 case StreamingResponseOutputItemDoneUpdate outputItemDoneUpdate when outputItemDoneUpdate.Item is McpToolDefinitionListItem mtdli:
-                    yield return CreateUpdate(new AIContent { RawRepresentation = mtdli });
+                    yield return CreateUpdate(new AIContent { RawRepresentation = mtdli }, outputItemDoneUpdate.OutputIndex);
                     break;
 
                 case StreamingResponseOutputItemDoneUpdate outputItemDoneUpdate when outputItemDoneUpdate.Item is McpToolCallApprovalRequestItem mtcari:
@@ -380,7 +399,7 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
                     })
                     {
                         RawRepresentation = mtcari,
-                    });
+                    }, outputItemDoneUpdate.OutputIndex);
                     break;
 
                 case StreamingResponseOutputItemDoneUpdate outputItemDoneUpdate when
@@ -393,7 +412,7 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
                         PopulateAnnotations(c, annotatedContent);
                     }
 
-                    yield return CreateUpdate(annotatedContent);
+                    yield return CreateUpdate(annotatedContent, outputItemDoneUpdate.OutputIndex);
                     break;
 
                 case StreamingResponseErrorUpdate errorUpdate:
@@ -415,7 +434,9 @@ internal sealed class OpenAIResponsesChatClient : IChatClient
                 case StreamingResponseUpdate when
                         streamingUpdate.GetType() == _internalResponseReasoningSummaryTextDeltaEventType &&
                         _summaryTextDeltaProperty?.GetValue(streamingUpdate) is string delta:
-                    yield return CreateUpdate(new TextReasoningContent(delta));
+                    // Try to get OutputIndex if available via reflection
+                    int? outputIndex = _internalResponseReasoningSummaryTextDeltaEventType?.GetProperty("OutputIndex")?.GetValue(streamingUpdate) as int?;
+                    yield return CreateUpdate(new TextReasoningContent(delta), outputIndex);
                     break;
 
                 default:

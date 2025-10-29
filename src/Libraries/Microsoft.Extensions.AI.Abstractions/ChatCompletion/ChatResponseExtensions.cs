@@ -135,10 +135,11 @@ public static class ChatResponseExtensions
         _ = Throw.IfNull(updates);
 
         ChatResponse response = new();
+        UpdateProcessingState state = new();
 
         foreach (var update in updates)
         {
-            ProcessUpdate(update, response);
+            ProcessUpdate(update, response, state);
         }
 
         FinalizeResponse(response);
@@ -168,10 +169,11 @@ public static class ChatResponseExtensions
             IAsyncEnumerable<ChatResponseUpdate> updates, CancellationToken cancellationToken)
         {
             ChatResponse response = new();
+            UpdateProcessingState state = new();
 
             await foreach (var update in updates.WithCancellation(cancellationToken).ConfigureAwait(false))
             {
-                ProcessUpdate(update, response);
+                ProcessUpdate(update, response, state);
             }
 
             FinalizeResponse(response);
@@ -318,14 +320,27 @@ public static class ChatResponseExtensions
         int count = response.Messages.Count;
         for (int i = 0; i < count; i++)
         {
-            CoalesceTextContent((List<AIContent>)response.Messages[i].Contents);
+            var contents = (List<AIContent>)response.Messages[i].Contents;
+
+            // Coalesce content
+            CoalesceContent(contents);
+
+            // Remove any separator markers that were inserted during processing
+            _ = contents.RemoveAll(static c => c is PartIdSeparatorContent);
         }
+    }
+
+    /// <summary>Tracks state across <see cref="ChatResponseUpdate"/> processing.</summary>
+    private sealed class UpdateProcessingState
+    {
+        public string? LastPartId;
     }
 
     /// <summary>Processes the <see cref="ChatResponseUpdate"/>, incorporating its contents into <paramref name="response"/>.</summary>
     /// <param name="update">The update to process.</param>
     /// <param name="response">The <see cref="ChatResponse"/> object that should be updated based on <paramref name="update"/>.</param>
-    private static void ProcessUpdate(ChatResponseUpdate update, ChatResponse response)
+    /// <param name="state">State tracking information across updates.</param>
+    private static void ProcessUpdate(ChatResponseUpdate update, ChatResponse response, UpdateProcessingState state)
     {
         // If there is no message created yet, or if the last update we saw had a different
         // identifying parts, create a new message.
@@ -339,12 +354,13 @@ public static class ChatResponseExtensions
                 NotNullOrEqual(update.Role, lastMessage.Role);
         }
 
-        // Get the message to target, either a new one or the last ones.
+        // Get the message to target, either a new one or the last one.
         ChatMessage message;
         if (isNewMessage)
         {
             message = new(ChatRole.Assistant, []);
             response.Messages.Add(message);
+            state.LastPartId = null; // Reset part ID tracking for new message
         }
         else
         {
@@ -378,6 +394,21 @@ public static class ChatResponseExtensions
             message.MessageId = update.MessageId;
         }
 
+        // Insert a separator if the part ID changed between two non-null values
+        if (update.PartId is not null && state.LastPartId is not null && update.PartId != state.LastPartId)
+        {
+            message.Contents.Add(PartIdSeparatorContent.Instance);
+        }
+
+        // Also insert a separator when transitioning from non-null to null, or null to non-null
+        // This ensures that PartId boundaries are respected even with mixed null/non-null values
+        bool hadPartId = state.LastPartId is not null;
+        bool hasPartId = update.PartId is not null;
+        if (hadPartId != hasPartId && message.Contents.Count > 0)
+        {
+            message.Contents.Add(PartIdSeparatorContent.Instance);
+        }
+
         foreach (var content in update.Contents)
         {
             switch (content)
@@ -391,6 +422,12 @@ public static class ChatResponseExtensions
                     message.Contents.Add(content);
                     break;
             }
+        }
+
+        // Update the last part ID if this update had one
+        if (update.PartId is not null)
+        {
+            state.LastPartId = update.PartId;
         }
 
         // Other members on a ChatResponseUpdate map to members of the ChatResponse.
@@ -441,4 +478,17 @@ public static class ChatResponseExtensions
     /// <summary>Gets whether two roles are not null and not the same as each other.</summary>
     private static bool NotNullOrEqual(ChatRole? r1, ChatRole? r2) =>
         r1.HasValue && r2.HasValue && r1.Value != r2.Value;
+
+    /// <summary>
+    /// Private marker type used as a separator between content parts with different PartId values.
+    /// These separators prevent coalescing across part boundaries and are removed during finalization.
+    /// </summary>
+    private sealed class PartIdSeparatorContent : AIContent
+    {
+        public static readonly PartIdSeparatorContent Instance = new();
+
+        private PartIdSeparatorContent()
+        {
+        }
+    }
 }

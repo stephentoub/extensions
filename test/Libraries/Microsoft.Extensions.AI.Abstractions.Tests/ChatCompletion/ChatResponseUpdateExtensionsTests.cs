@@ -822,6 +822,111 @@ public class ChatResponseUpdateExtensionsTests
         Assert.Equal(expected, response.CreatedAt);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToChatResponse_PartIdPreventsCoalescing(bool useAsync)
+    {
+        // Test that different PartIds prevent content from being coalesced
+        ChatResponseUpdate[] updates =
+        [
+            new(ChatRole.Assistant, "Part 0: ") { PartId = "0" },
+            new(ChatRole.Assistant, "text") { PartId = "0" },
+            new(ChatRole.Assistant, " Part 1: ") { PartId = "1" },
+            new(ChatRole.Assistant, "different") { PartId = "1" },
+            new(ChatRole.Assistant, " Part 0 again: ") { PartId = "0" },
+            new(ChatRole.Assistant, "more") { PartId = "0" },
+        ];
+
+        ChatResponse response = useAsync ?
+            await YieldAsync(updates).ToChatResponseAsync() :
+            updates.ToChatResponse();
+
+        ChatMessage message = response.Messages.Single();
+        Assert.Equal(3, message.Contents.Count);
+        Assert.Equal("Part 0: text", message.Contents[0].ToString());
+        Assert.Equal(" Part 1: different", message.Contents[1].ToString());
+        Assert.Equal(" Part 0 again: more", message.Contents[2].ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToChatResponse_NullPartIdAllowsCoalescing(bool useAsync)
+    {
+        // Test that null PartIds allow normal coalescing
+        ChatResponseUpdate[] updates =
+        [
+            new(ChatRole.Assistant, "Hello "),
+            new(ChatRole.Assistant, "world"),
+            new(ChatRole.Assistant, "!"),
+        ];
+
+        ChatResponse response = useAsync ?
+            await YieldAsync(updates).ToChatResponseAsync() :
+            updates.ToChatResponse();
+
+        ChatMessage message = response.Messages.Single();
+        Assert.Single(message.Contents);
+        Assert.Equal("Hello world!", message.Contents[0].ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToChatResponse_MixedPartIdHandling(bool useAsync)
+    {
+        // Test mixed scenario with some null and some non-null PartIds
+        ChatResponseUpdate[] updates =
+        [
+            new(ChatRole.Assistant, "Intro ") { PartId = null },
+            new(ChatRole.Assistant, "text ") { PartId = null },
+            new(ChatRole.Assistant, "Part 1 ") { PartId = "1" },
+            new(ChatRole.Assistant, "content") { PartId = "1" },
+            new(ChatRole.Assistant, " outro") { PartId = null },
+        ];
+
+        ChatResponse response = useAsync ?
+            await YieldAsync(updates).ToChatResponseAsync() :
+            updates.ToChatResponse();
+
+        ChatMessage message = response.Messages.Single();
+
+        // Null to non-null and non-null to null create boundaries
+        // So: "Intro text " (null) | "Part 1 content" (partId=1) | " outro" (null)
+        Assert.Equal(3, message.Contents.Count);
+        Assert.Equal("Intro text ", message.Contents[0].ToString());
+        Assert.Equal("Part 1 content", message.Contents[1].ToString());
+        Assert.Equal(" outro", message.Contents[2].ToString());
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ToChatResponse_PartIdWithMultipleContentTypes(bool useAsync)
+    {
+        // Test that PartId works with different content types
+        ChatResponseUpdate[] updates =
+        [
+            new() { Contents = [new TextContent("Text in part 0")], PartId = "0" },
+            new() { Contents = [new FunctionCallContent("call1", "func1", new Dictionary<string, object?> { ["arg"] = "value" })], PartId = "1" },
+            new() { Contents = [new TextContent("Text in part 2")], PartId = "2" },
+            new() { Contents = [new TextContent(" more in part 2")], PartId = "2" },
+        ];
+
+        ChatResponse response = useAsync ?
+            await YieldAsync(updates).ToChatResponseAsync() :
+            updates.ToChatResponse();
+
+        ChatMessage message = response.Messages.Single();
+        Assert.Equal(3, message.Contents.Count);
+        Assert.IsType<TextContent>(message.Contents[0]);
+        Assert.Equal("Text in part 0", message.Contents[0].ToString());
+        Assert.IsType<FunctionCallContent>(message.Contents[1]);
+        Assert.IsType<TextContent>(message.Contents[2]);
+        Assert.Equal("Text in part 2 more in part 2", message.Contents[2].ToString());
+    }
+
     private static async IAsyncEnumerable<ChatResponseUpdate> YieldAsync(IEnumerable<ChatResponseUpdate> updates)
     {
         foreach (ChatResponseUpdate update in updates)
