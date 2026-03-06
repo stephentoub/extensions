@@ -5,8 +5,7 @@ description: >
   If changes are detected, creates a PR to implement the updates.
 
 on:
-  schedule: weekly
-  workflow_dispatch:
+  schedule: daily on weekdays
 
 permissions:
   contents: read

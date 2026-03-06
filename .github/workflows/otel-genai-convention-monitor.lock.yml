@@ -23,13 +23,13 @@
 #
 # Monitors the OpenTelemetry GenAI semantic conventions for changes and evaluates whether they impact the Microsoft.Extensions.AI OpenTelemetry implementations. If changes are detected, creates a PR to implement the updates.
 #
-# gh-aw-metadata: {"schema_version":"v1","frontmatter_hash":"c758363bd51f4b394c547343bd0f32ba8060cc4a5e637bf68739dea5fa3cb814","compiler_version":"v0.53.6"}
+# gh-aw-metadata: {"schema_version":"v1","frontmatter_hash":"bb3390ad4d8fea80cfa4e66d4c64603b48d71b9df439b9fc5edcad4abbda9429","compiler_version":"v0.53.6"}
 
 name: "OTel GenAI Semantic Convention Monitor"
 "on":
   schedule:
-  - cron: "52 16 * * 6"
-    # Friendly format: weekly (scattered)
+  - cron: "52 16 * * 1-5"
+    # Friendly format: daily on weekdays (scattered)
   workflow_dispatch:
 
 permissions: {}
